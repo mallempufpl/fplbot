@@ -36,20 +36,35 @@ const FPL_ACCOUNTS_IG = parseAccounts(process.env.IG_ACCOUNTS, DEFAULT_IG);
 // =====================
 async function fetchTweets(username, count = 5) {
   try {
-    const { data } = await axios.get(`https://api.fxtwitter.com/${username}`, {
-      timeout: 10000,
-      headers: { 'User-Agent': 'FPLBot/1.0' },
-    });
+    const { data } = await axios.get(
+      `https://syndication.twitter.com/srv/timeline-profile/screen-name/${username}`,
+      {
+        timeout: 12000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html',
+        },
+      }
+    );
 
-    if (!data?.tweets) return [];
+    // Extract __NEXT_DATA__ JSON dari HTML
+    const match = data.match(/<script id="__NEXT_DATA__"[^>]*>(.*?)<\/script>/s);
+    if (!match) return [];
 
-    return data.tweets.slice(0, count).map(t => ({
-      text: t.text || '',
-      date: t.created_at || '',
-      likes: t.likes || 0,
-      retweets: t.retweets || 0,
-      url: t.url || `https://x.com/${username}/status/${t.id}`,
-    }));
+    const nextData = JSON.parse(match[1]);
+    const entries = nextData?.props?.pageProps?.timeline?.entries || [];
+
+    return entries.slice(0, count).map(entry => {
+      const tweet = entry.content?.tweet;
+      if (!tweet) return null;
+      return {
+        text: tweet.full_text || tweet.text || '',
+        date: tweet.created_at || '',
+        likes: tweet.favorite_count || 0,
+        retweets: tweet.retweet_count || 0,
+        url: `https://x.com/${username}/status/${tweet.id_str || tweet.id}`,
+      };
+    }).filter(Boolean);
   } catch {
     return [];
   }
