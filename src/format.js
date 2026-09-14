@@ -112,8 +112,8 @@ function fixtureTable(teamName, fixtures, teams) {
   fixtures.slice(0, 8).forEach(f => {
     const opp = teams[f.opponent];
     const oppName = opp?.short_name || `Team${f.opponent}`;
-    const fdrBar = '🟢🟡🟠🔴🔴';
-    const fdrEmoji = fdrBar[f.fdr - 1] || '⚪';
+    const fdrEmojis = ['🟢', '🟡', '🟠', '🔴', '🔴'];
+    const fdrEmoji = fdrEmojis[f.fdr - 1] || '⚪';
     lines.push(
       `GW${f.gw}: ${f.isHome ? '🏠' : '✈️'} ${oppName} (FDR ${f.fdr} ${fdrEmoji})`
     );
