@@ -32,6 +32,19 @@ const FPL_ACCOUNTS_X = parseAccounts(process.env.X_ACCOUNTS, DEFAULT_X);
 const FPL_ACCOUNTS_IG = parseAccounts(process.env.IG_ACCOUNTS, DEFAULT_IG);
 
 // =====================
+// HELPERS
+// =====================
+function sanitizeText(text) {
+  // Hapus karakter non-UTF-8 / surrogate pairs yang rusak
+  return text
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/g, '')  // lone high surrogate
+    .replace(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '')  // lone low surrogate
+    .replace(/[\uFFFE\uFFFF]/g, '')                         // non-characters
+    .replace(/[^\x09\x0A\x0D\x20-\uD7FF\uE000-\uFFFD\u{10000}-\u{10FFFF}]/gu, '') // invalid XML chars
+    .trim();
+}
+
+// =====================
 // X / TWITTER
 // =====================
 async function fetchTweets(username, count = 5) {
@@ -58,7 +71,7 @@ async function fetchTweets(username, count = 5) {
       const tweet = entry.content?.tweet;
       if (!tweet) return null;
       return {
-        text: tweet.full_text || tweet.text || '',
+        text: sanitizeText(tweet.full_text || tweet.text || ''),
         date: tweet.created_at || '',
         likes: tweet.favorite_count || 0,
         retweets: tweet.retweet_count || 0,
@@ -113,7 +126,7 @@ async function fetchInstagramViaRSS(username, count = 3) {
           .trim();
 
         items.push({
-          text: cleanDesc || title || '(tanpa caption)',
+          text: sanitizeText(cleanDesc || title || '(tanpa caption)'),
           date: pubDate || '',
           url: link || `https://instagram.com/${username}`,
         });
@@ -150,7 +163,7 @@ async function fetchInstagramViaEmbed(username, count = 3) {
       return edges.slice(0, count).map(edge => {
         const node = edge.node;
         return {
-          text: node.edge_media_to_caption?.edges?.[0]?.node?.text || '(tanpa caption)',
+          text: sanitizeText(node.edge_media_to_caption?.edges?.[0]?.node?.text || '(tanpa caption)'),
           date: node.taken_at_timestamp ? new Date(node.taken_at_timestamp * 1000).toISOString() : '',
           url: `https://instagram.com/p/${node.shortcode}/`,
         };
