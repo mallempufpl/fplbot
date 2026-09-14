@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: fpl-differential-bot
+    runtime: docker
+    plan: free
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: CHAT_ID
+        sync: false
+    healthCheckPath: /health
