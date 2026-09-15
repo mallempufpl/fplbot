@@ -57,11 +57,12 @@ async function main() {
 
     // Start bot (polling mode — works behind firewalls, no domain needed)
     await bot.launch();
-    console.log('🤖 FPL Differential Bot is running!');
+    console.log('🤖 FPL Differential Bot is running! (v2)');
     console.log(`📋 Admin CHAT_ID: ${CHAT_ID || '(not set)'}`);
 
     // Kirim notifikasi restart ke admin
     if (CHAT_ID) {
+      console.log('📨 Sending startup notification to CHAT_ID:', CHAT_ID);
       try {
         await bot.telegram.sendMessage(CHAT_ID,
           '✅ <b>Bot sudah online!</b>\n\n' +
@@ -69,9 +70,12 @@ async function main() {
           'Ketik /start untuk lihat daftar perintah.',
           { parse_mode: 'HTML' }
         );
+        console.log('✅ Startup notification sent');
       } catch (e) {
-        console.error('Failed to send startup notification:', e.message);
+        console.error('❌ Failed to send startup notification:', e.message);
       }
+    } else {
+      console.log('⚠️ CHAT_ID not set, skipping startup notification');
     }
   } catch (err) {
     console.error('❌ Failed to start:', err.message);
