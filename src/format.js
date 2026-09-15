@@ -243,18 +243,50 @@ function transferSuggestions(suggestions) {
   return lines.join('\n');
 }
 
+function getPlayerTag(p) {
+  const q = p.scoring.qualityScore;
+  const safe = p.scoring.minutesSafe;
+  const fixture = p.scoring.components.fixture;
+  const form = parseFloat(p.form) || 0;
+
+  // Recommended: quality tinggi + aman menit + fixture bagus
+  if (q >= 65 && safe && fixture >= 0.5 && form >= 4) {
+    if (p.scoring.label === 'DIFFERENTIAL') return '💎 PICK DIFFERENTIAL';
+    return '✅ RECOMMENDED';
+  }
+  // Bagus tapi ada risiko
+  if (q >= 55 && safe) return '👍 LAYAK DIPERTIMBANGKAN';
+  // Overhyped: banyak dibeli tapi skor rendah atau overperforming
+  if (q < 40 || (p.scoring.regression === 'OVERPERFORMING' && q < 60)) return '⚠️ OVERHYPED';
+  return '';
+}
+
+function getHoldTag(p) {
+  const q = p.scoring.qualityScore;
+  const safe = p.scoring.minutesSafe;
+
+  // Pemain yang dijual tapi sebenarnya masih bagus
+  if (q >= 65 && safe && p.status === 'a') return '🔒 HOLD — Jangan jual!';
+  if (q >= 50 && safe && p.status === 'a' && p.scoring.regression === 'UNDERPERFORMING') return '💎 HOLD — Potensi regresi naik';
+  if (p.status !== 'a') return ''; // memang wajar dijual
+  if (q >= 50 && safe) return '🤔 PERTIMBANGKAN HOLD';
+  return '';
+}
+
 function trendingCard(transfersIn, transfersOut, currentGw) {
   const lines = [];
 
-  // Transfer IN
   lines.push(`<b>📈 TRANSFER IN — GW${currentGw}</b>`);
   lines.push('');
   transfersIn.slice(0, 10).forEach((p, i) => {
     const num = `${i + 1}`.padStart(2, ' ');
     const qIcon = p.scoring.qualityScore >= 70 ? '🟢' : p.scoring.qualityScore >= 40 ? '🟡' : '🔴';
+    const tag = getPlayerTag(p);
+
     lines.push(`${num}. <b>${p.web_name}</b> — ${p.teamData?.short_name || '?'}`);
     lines.push(`      +${p.transfers_in_event.toLocaleString()} transfers`);
     lines.push(`      ${qIcon} Q:${p.scoring.qualityScore} · ${priceStr(p.now_cost)} · EO ${p.selected_by_percent}%`);
+    if (tag) lines.push(`      <b>${tag}</b>`);
     lines.push('');
   });
 
@@ -273,6 +305,7 @@ function trendingOutCard(transfersOut, currentGw) {
     else if (p.status === 's') reasons.push('❌ Suspended');
     else if (p.status === 'd') reasons.push('⚠️ Doubtful');
     if (p.scoring.regression === 'OVERPERFORMING') reasons.push('📉 Overperform');
+    const holdTag = getHoldTag(p);
 
     lines.push(`${num}. <b>${p.web_name}</b> — ${p.teamData?.short_name || '?'}`);
     lines.push(`      -${p.transfers_out_event.toLocaleString()} transfers`);
@@ -280,6 +313,7 @@ function trendingOutCard(transfersOut, currentGw) {
       lines.push(`      ${reasons.join(' · ')}`);
     }
     lines.push(`      Q:${p.scoring.qualityScore} · ${priceStr(p.now_cost)} · EO ${p.selected_by_percent}%`);
+    if (holdTag) lines.push(`      <b>${holdTag}</b>`);
     lines.push('');
   });
 
