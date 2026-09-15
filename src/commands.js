@@ -70,10 +70,17 @@ function registerCommands(bot) {
       '/suggest &lt;FPL ID&gt; — Saran transfer terbaik',
       '',
       '<b>📰 Info & Berita:</b>',
-      '/news — Semua berita (X + Instagram)',
-      '/news x [akun] — Berita dari X/Twitter',
-      '/news ig [akun] — Berita dari Instagram',
+      '/news — Semua berita (X + IG)',
+      '/news x — Semua berita dari X',
+      '/news ig — Semua berita dari Instagram',
+      '/news x &lt;username&gt; — Berita akun X tertentu',
+      '/news ig &lt;username&gt; — Berita akun IG tertentu',
+      '/newslist — Daftar akun sumber berita',
       '/fixtures &lt;tim&gt; — Jadwal & FDR',
+      '',
+      '<i>Contoh: /news x OfficialFPL</i>',
+      '<i>Contoh: /news ig premierleague</i>',
+      '<i>Username tanpa @, cukup nama akunnya saja</i>',
       '',
       '<b>📋 Watchlist:</b>',
       '/watch &lt;nama&gt; — Tambah ke watchlist',
@@ -533,6 +540,32 @@ function registerCommands(bot) {
       console.error('Error /news:', err.message);
       ctx.reply('❌ Gagal mengambil berita. Coba lagi nanti.');
     }
+  });
+
+  // /newslist — Lihat daftar akun sumber berita
+  bot.command('newslist', ctx => {
+    const lines = ['<b>📰 Daftar Akun Sumber Berita</b>\n'];
+
+    lines.push('<b>🐦 X/Twitter:</b>');
+    if (FPL_ACCOUNTS_X.length === 0) {
+      lines.push('  <i>Belum ada akun</i>');
+    } else {
+      FPL_ACCOUNTS_X.forEach(a => lines.push(`  • ${a.username}`));
+    }
+
+    lines.push('\n<b>📸 Instagram:</b>');
+    if (FPL_ACCOUNTS_IG.length === 0) {
+      lines.push('  <i>Belum ada akun</i>');
+    } else {
+      FPL_ACCOUNTS_IG.forEach(a => lines.push(`  • ${a.username}`));
+    }
+
+    lines.push('\n<b>Cara edit akun:</b>');
+    lines.push('<code>/setenv X_ACCOUNTS OfficialFPL,FPLStatus,BenCrellin</code>');
+    lines.push('<code>/setenv IG_ACCOUNTS officialfpl,premierleague</code>');
+    lines.push('\n<i>Username tanpa @, pisahkan dengan koma</i>');
+
+    ctx.replyWithHTML(lines.join('\n'));
   });
 
   // /refresh
