@@ -9,6 +9,7 @@ const { startScheduler } = require('./scheduler');
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHAT_ID = process.env.CHAT_ID;
 const PORT = process.env.PORT || 3000;
+const WEBHOOK_DOMAIN = process.env.RAILWAY_PUBLIC_DOMAIN || process.env.RENDER_EXTERNAL_HOSTNAME || process.env.WEBHOOK_DOMAIN;
 
 if (!BOT_TOKEN) {
   console.error('❌ BOT_TOKEN environment variable is required.');
@@ -33,33 +34,67 @@ bot.catch((err, ctx) => {
   console.error(`❌ Bot error for ${ctx.updateType}:`, err.message);
 });
 
-// Health check HTTP server
-const server = http.createServer((req, res) => {
-  if (req.url === '/health' || req.url === '/') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    res.end(JSON.stringify({ status: 'ok', uptime: process.uptime() }));
-  } else {
-    res.writeHead(404);
-    res.end();
-  }
-});
-
 // Start
 async function main() {
   try {
-    server.listen(PORT, () => {
-      console.log(`🌐 Health check server on port ${PORT}`);
-    });
+    if (WEBHOOK_DOMAIN) {
+      // === WEBHOOK MODE (Railway/Render/Production) ===
+      const webhookPath = `/webhook/${BOT_TOKEN.split(':')[0]}`;
+      const webhookUrl = `https://${WEBHOOK_DOMAIN}${webhookPath}`;
+
+      // HTTP server dengan webhook handler
+      const server = http.createServer((req, res) => {
+        if (req.url === '/health' || req.url === '/') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', uptime: process.uptime() }));
+        } else if (req.url === webhookPath && req.method === 'POST') {
+          let body = '';
+          req.on('data', chunk => body += chunk);
+          req.on('end', () => {
+            try {
+              bot.handleUpdate(JSON.parse(body), res);
+            } catch (e) {
+              console.error('Webhook error:', e.message);
+              res.writeHead(400);
+              res.end();
+            }
+          });
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      server.listen(PORT, () => {
+        console.log(`🌐 Server on port ${PORT}`);
+      });
+
+      await bot.telegram.setWebhook(webhookUrl);
+      console.log(`🔗 Webhook mode: ${webhookUrl}`);
+
+    } else {
+      // === POLLING MODE (Lokal/Development) ===
+      const server = http.createServer((req, res) => {
+        if (req.url === '/health' || req.url === '/') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'ok', uptime: process.uptime() }));
+        } else {
+          res.writeHead(404);
+          res.end();
+        }
+      });
+
+      server.listen(PORT, () => {
+        console.log(`🌐 Health check server on port ${PORT}`);
+      });
+
+      await bot.telegram.deleteWebhook({ drop_pending_updates: false });
+      await bot.launch();
+      console.log('🔗 Polling mode');
+    }
 
     startScheduler(bot, CHAT_ID);
-
-    // Bersihkan webhook/session lama
-    await bot.telegram.deleteWebhook({ drop_pending_updates: false });
-    await new Promise(r => setTimeout(r, 3000));
-
-    // Start polling — HARUS di-await
-    await bot.launch();
-    console.log('🤖 FPL Differential Bot is running! (v6)');
+    console.log('🤖 FPL Differential Bot is running! (v7)');
     console.log(`📋 Admin CHAT_ID: ${CHAT_ID || '(not set)'}`);
 
     // Kirim notifikasi ke admin
@@ -77,26 +112,11 @@ async function main() {
     }
   } catch (err) {
     console.error('❌ Failed to start:', err.message);
-    // Retry setelah 5 detik (untuk handle 409 Conflict)
-    console.log('🔁 Retrying in 5 seconds...');
-    await new Promise(r => setTimeout(r, 5000));
-    try {
-      await bot.launch();
-      console.log('🤖 Bot started on retry! (v6)');
-      if (CHAT_ID) {
-        await bot.telegram.sendMessage(CHAT_ID,
-          '✅ <b>Bot sudah online!</b> (retry)\n\nKetik /start untuk lihat daftar perintah.',
-          { parse_mode: 'HTML' }
-        ).catch(() => {});
-      }
-    } catch (retryErr) {
-      console.error('❌ Retry failed:', retryErr.message);
-      process.exit(1);
-    }
+    process.exit(1);
   }
 }
 
 main();
 
-process.once('SIGINT', () => { bot.stop('SIGINT'); server.close(); });
-process.once('SIGTERM', () => { bot.stop('SIGTERM'); server.close(); });
+process.once('SIGINT', () => { bot.stop('SIGINT'); });
+process.once('SIGTERM', () => { bot.stop('SIGTERM'); });

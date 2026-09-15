@@ -163,14 +163,13 @@ function registerAdminCommands(bot) {
   bot.command('restart', async (ctx) => {
     if (!isOwner(ctx)) return ctx.reply('🚫 Hanya pemilik bot.');
 
-    await ctx.reply('🔄 Bot akan restart...');
+    await ctx.reply('🔄 Bot akan restart dalam 3 detik...');
 
     console.log('🔄 Restart requested via /restart command');
 
-    // Exit dengan code 1 agar Railway (restart policy: On Failure) restart otomatis
     setTimeout(() => {
-      process.exit(1);
-    }, 1000);
+      process.exit(1); // Railway restart policy: On Failure → auto restart
+    }, 3000);
   });
 
   // /myid — cek chat ID sendiri (berguna untuk setup awal)
