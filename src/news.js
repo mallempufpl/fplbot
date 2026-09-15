@@ -28,8 +28,16 @@ const DEFAULT_IG = [
   { username: 'fpl.focal', label: 'FPL Focal' },
 ];
 
-const FPL_ACCOUNTS_X = parseAccounts(process.env.X_ACCOUNTS, DEFAULT_X);
-const FPL_ACCOUNTS_IG = parseAccounts(process.env.IG_ACCOUNTS, DEFAULT_IG);
+// Getter functions — selalu baca dari process.env terbaru
+function getAccountsX() {
+  return parseAccounts(process.env.X_ACCOUNTS, DEFAULT_X);
+}
+function getAccountsIG() {
+  return parseAccounts(process.env.IG_ACCOUNTS, DEFAULT_IG);
+}
+
+// Backward compatible exports (dynamic getter)
+// Export langsung pakai getter functions
 
 // =====================
 // HELPERS
@@ -205,7 +213,7 @@ async function fetchInstagramPosts(username, count = 2) {
 async function fetchAllFplNews() {
   const results = [];
 
-  const fetches = FPL_ACCOUNTS_X.map(async (acc) => {
+  const fetches = getAccountsX().map(async (acc) => {
     const tweets = await fetchTweets(acc.username, 3);
     if (tweets.length > 0) {
       results.push({ platform: 'X', account: acc, posts: tweets });
@@ -220,7 +228,7 @@ async function fetchAllInstagramNews() {
   const results = [];
 
   // Fetch sequentially untuk IG (hindari rate limit)
-  for (const acc of FPL_ACCOUNTS_IG) {
+  for (const acc of getAccountsIG()) {
     const posts = await fetchInstagramPosts(acc.username, 2);
     if (posts.length > 0) {
       results.push({ platform: 'IG', account: acc, posts });
@@ -243,7 +251,7 @@ async function fetchAccountNews(query, platform = null) {
 
   // Cari di X
   if (!platform || platform === 'x') {
-    const xAcc = FPL_ACCOUNTS_X.find(a =>
+    const xAcc = getAccountsX().find(a =>
       a.username.toLowerCase().includes(q) || a.label.toLowerCase().includes(q)
     );
     if (xAcc) {
@@ -254,7 +262,7 @@ async function fetchAccountNews(query, platform = null) {
 
   // Cari di IG
   if (!platform || platform === 'ig') {
-    const igAcc = FPL_ACCOUNTS_IG.find(a =>
+    const igAcc = getAccountsIG().find(a =>
       a.username.toLowerCase().includes(q) || a.label.toLowerCase().includes(q)
     );
     if (igAcc) {
@@ -430,7 +438,7 @@ async function fetchNewsIntel(playerNames) {
 
   // Fetch semua tweet dari akun X yang dikonfigurasi
   const allTweets = [];
-  const fetches = FPL_ACCOUNTS_X.map(async (acc) => {
+  const fetches = getAccountsX().map(async (acc) => {
     const tweets = await fetchTweets(acc.username, 10);
     for (const t of tweets) {
       allTweets.push({ ...t, source: acc.username });
@@ -440,7 +448,7 @@ async function fetchNewsIntel(playerNames) {
 
   // Fetch semua post IG
   const allIgPosts = [];
-  for (const acc of FPL_ACCOUNTS_IG) {
+  for (const acc of getAccountsIG()) {
     const posts = await fetchInstagramPosts(acc.username, 5);
     for (const p of posts) {
       allIgPosts.push({ ...p, source: acc.username });
@@ -518,5 +526,5 @@ module.exports = {
   fetchAccountNews, formatNews, formatSingleAccount,
   sendIgPostsWithImages,
   fetchNewsIntel, formatNewsIntel,
-  FPL_ACCOUNTS_X, FPL_ACCOUNTS_IG,
+  getAccountsX, getAccountsIG,
 };

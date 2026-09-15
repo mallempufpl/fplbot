@@ -8,7 +8,7 @@ const {
   fetchAccountNews, formatNews, formatSingleAccount,
   sendIgPostsWithImages,
   fetchNewsIntel, formatNewsIntel,
-  FPL_ACCOUNTS_X, FPL_ACCOUNTS_IG,
+  getAccountsX, getAccountsIG,
 } = require('./news');
 
 // Cache scored players (refresh setiap fetch baru)
@@ -568,17 +568,17 @@ function registerCommands(bot) {
     const lines = ['<b>📰 Daftar Akun Sumber Berita</b>\n'];
 
     lines.push('<b>🐦 X/Twitter:</b>');
-    if (FPL_ACCOUNTS_X.length === 0) {
+    if (getAccountsX().length === 0) {
       lines.push('  <i>Belum ada akun</i>');
     } else {
-      FPL_ACCOUNTS_X.forEach(a => lines.push(`  • ${a.username}`));
+      getAccountsX().forEach(a => lines.push(`  • ${a.username}`));
     }
 
     lines.push('\n<b>📸 Instagram:</b>');
-    if (FPL_ACCOUNTS_IG.length === 0) {
+    if (getAccountsIG().length === 0) {
       lines.push('  <i>Belum ada akun</i>');
     } else {
-      FPL_ACCOUNTS_IG.forEach(a => lines.push(`  • ${a.username}`));
+      getAccountsIG().forEach(a => lines.push(`  • ${a.username}`));
     }
 
     lines.push('\n<b>Cara edit akun:</b>');
