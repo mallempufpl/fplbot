@@ -7,6 +7,7 @@ const ENV_PATH = path.join(__dirname, '..', '.env');
 const ALLOWED_KEYS = [
   'BOT_TOKEN', 'CHAT_ID', 'FPL_ID', 'PORT',
   'EMAIL', 'IG_SESSION_ID', 'ADMIN_SECRET',
+  'X_ACCOUNTS', 'IG_ACCOUNTS',
 ];
 
 // Key yang nilainya di-mask saat ditampilkan
