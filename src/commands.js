@@ -7,6 +7,10 @@ const {
 } = require('./config');
 const fmt = require('./format');
 const {
+  ensureHistoricalData, refreshHistoricalData, makePlayerKey,
+  analyzePlayerTrend, hasHistoricalData, SEASONS,
+} = require('./historical');
+const {
   fetchAllNews, fetchAllFplNews, fetchAllInstagramNews,
   fetchAccountNews, formatNews, formatSingleAccount,
   sendIgPostsWithImages,
@@ -22,6 +26,13 @@ const CACHE_TTL = 600_000; // 10 menit
 async function getScoredPlayers() {
   const now = Date.now();
   if (cachedScored && now - cacheTs < CACHE_TTL) return cachedScored;
+
+  // Pastikan data historis sudah ada (lazy load, auto-refresh weekly)
+  try {
+    await ensureHistoricalData();
+  } catch (err) {
+    console.error('Historical data load warning:', err.message);
+  }
 
   const data = await fetchAll();
   const scored = scoreAllPlayers(data.players);
@@ -65,6 +76,7 @@ function registerCommands(bot) {
       '<b>📊 Analisa Pemain:</b>',
       '/player &lt;nama&gt; — Detail pemain',
       '/analyze &lt;nama&gt; — Analisa mendalam pemain',
+      '/history &lt;nama&gt; — Data historis 3 musim',
       '/compare &lt;A&gt; vs &lt;B&gt; — Bandingkan 2 pemain',
       '/best &lt;posisi&gt; — Top pemain per posisi',
       '/differentials [posisi] — Top differential picks',
@@ -110,6 +122,7 @@ function registerCommands(bot) {
       '/restart — Restart bot',
       '/myid — Lihat Chat ID kamu',
       '/refresh — Refresh data dari API',
+      '/refreshhistory — Refresh data historis 3 musim',
     ].join('\n'));
   });
 
@@ -773,6 +786,54 @@ function registerCommands(bot) {
     }
   });
 
+  // /history <nama> — Lihat data historis pemain 3 musim
+  bot.command('history', async ctx => {
+    const query = ctx.message.text.replace(/^\/history\s*/i, '').trim();
+    if (!query) return ctx.reply('Gunakan: /history <nama pemain>');
+
+    try {
+      if (!hasHistoricalData()) {
+        ctx.reply('⏳ Mengunduh data historis 3 musim... (pertama kali)');
+        await refreshHistoricalData();
+      }
+
+      const { scored } = await getScoredPlayers();
+      const result = findPlayer(scored, query);
+
+      if (!result) return ctx.reply(`❌ Pemain "${query}" tidak ditemukan.`);
+      if (Array.isArray(result)) {
+        const names = result.slice(0, 10).map(p => `• ${p.web_name} (${p.teamData?.short_name || '?'})`);
+        return ctx.replyWithHTML(`Ditemukan ${result.length} pemain:\n${names.join('\n')}\n\nCoba lebih spesifik.`);
+      }
+
+      const playerKey = makePlayerKey(result.first_name, result.second_name);
+      const trend = analyzePlayerTrend(playerKey);
+
+      ctx.replyWithHTML(fmt.historyCard(result, trend));
+    } catch (err) {
+      console.error('Error /history:', err.message);
+      ctx.reply('❌ Gagal mengambil data historis.');
+    }
+  });
+
+  // /refreshhistory — Force refresh data historis
+  bot.command('refreshhistory', async ctx => {
+    try {
+      ctx.reply('⏳ Mengunduh ulang data historis 3 musim...');
+      const results = await refreshHistoricalData();
+      const lines = ['✅ Data historis berhasil diperbarui:\n'];
+      for (const [season, count] of Object.entries(results)) {
+        lines.push(`  ${season}: ${count} pemain`);
+      }
+      cachedScored = null; cacheTs = 0;
+      lines.push('\n💡 Quality score semua pemain akan di-recalculate.');
+      ctx.reply(lines.join('\n'));
+    } catch (err) {
+      console.error('Error /refreshhistory:', err.message);
+      ctx.reply('❌ Gagal refresh data historis.');
+    }
+  });
+
   // /refresh
   bot.command('refresh', async ctx => {
     try {
@@ -780,7 +841,7 @@ function registerCommands(bot) {
       cacheTs = 0;
       require('./fpl-api').clearCache();
       await getScoredPlayers();
-      ctx.reply('✅ Data di-refresh dari FPL API.');
+      ctx.reply('✅ Data di-refresh dari FPL API.\n💡 Untuk refresh data historis: /refreshhistory');
     } catch (err) {
       console.error('Error /refresh:', err.message);
       ctx.reply('❌ Gagal refresh data.');

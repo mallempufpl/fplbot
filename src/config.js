@@ -5,13 +5,13 @@ const POSITION_EMOJI = { 1: '🧤', 2: '🛡', 3: '🎯', 4: '⚽' };
 // DEFAULT WEIGHTS
 // =====================
 const DEFAULT_WEIGHTS = {
-  1: { xgi: 0.05, form: 0.20, fixture: 0.20, minutes: 0.20, value: 0.10, def: 0.25 },
-  2: { xgi: 0.15, form: 0.18, fixture: 0.20, minutes: 0.15, value: 0.12, def: 0.20 },
-  3: { xgi: 0.32, form: 0.18, fixture: 0.18, minutes: 0.15, value: 0.15, def: 0.00 },
-  4: { xgi: 0.38, form: 0.18, fixture: 0.16, minutes: 0.15, value: 0.13, def: 0.00 },
+  1: { xgi: 0.05, form: 0.17, fixture: 0.17, minutes: 0.17, value: 0.09, def: 0.22, trend: 0.13 },
+  2: { xgi: 0.13, form: 0.15, fixture: 0.17, minutes: 0.13, value: 0.10, def: 0.17, trend: 0.15 },
+  3: { xgi: 0.27, form: 0.15, fixture: 0.15, minutes: 0.13, value: 0.13, def: 0.00, trend: 0.17 },
+  4: { xgi: 0.32, form: 0.15, fixture: 0.13, minutes: 0.13, value: 0.11, def: 0.00, trend: 0.16 },
 };
 
-const ALL_METRICS = ['xgi', 'form', 'fixture', 'minutes', 'value', 'def'];
+const ALL_METRICS = ['xgi', 'form', 'fixture', 'minutes', 'value', 'def', 'trend'];
 
 const METRIC_LABELS = {
   xgi: 'xGI/90 (Expected Goal Involvement)',
@@ -20,6 +20,7 @@ const METRIC_LABELS = {
   minutes: 'Minutes (Keamanan menit bermain)',
   value: 'Value (Form per harga)',
   def: 'Defense (xGC untuk GK/DEF)',
+  trend: 'Trend (Pola historis 3 musim)',
 };
 
 // =====================

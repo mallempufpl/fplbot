@@ -385,6 +385,7 @@ function analyzeCard(p, currentGw) {
     minutes: 'Minutes',
     value: 'Value',
     def: 'Defense',
+    trend: 'Trend 3 Musim',
   };
 
   for (const metric of active) {
@@ -442,8 +443,12 @@ function analyzeCard(p, currentGw) {
   lines.push(`  Goals vs xG: ${goalsScored} vs ${xG.toFixed(1)} (${goalDiff >= 0 ? '+' : ''}${goalDiff.toFixed(1)})`);
   lines.push(`  Assists vs xA: ${assists} vs ${xA.toFixed(1)} (${assistDiff >= 0 ? '+' : ''}${assistDiff.toFixed(1)})`);
 
-  if (s.regression === 'OVERPERFORMING') {
+  if (s.regression === 'CLINICAL_FINISHER') {
+    lines.push(`  🎯 <b>CLINICAL FINISHER</b> — konsisten outperform xG multi-musim (skill, bukan luck)`);
+  } else if (s.regression === 'OVERPERFORMING') {
     lines.push(`  ⚠️ <b>OVERPERFORMING</b> — waspada regresi turun`);
+  } else if (s.regression === 'POOR_FINISHER') {
+    lines.push(`  📉 <b>POOR FINISHER</b> — konsisten underperform xG multi-musim`);
   } else if (s.regression === 'UNDERPERFORMING') {
     lines.push(`  💎 <b>UNDERPERFORMING</b> — potensi regresi naik, beli murah!`);
   } else {
@@ -463,6 +468,27 @@ function analyzeCard(p, currentGw) {
   }
   lines.push('');
 
+  // === Historical Trend ===
+  if (s.trendData) {
+    const td = s.trendData;
+    const trendIcon = td.trendLabel === 'IMPROVING' ? '📈' : td.trendLabel === 'DECLINING' ? '📉' : '➡️';
+    lines.push('<b>📜 Tren Historis (3 Musim)</b>');
+    lines.push(`  ${trendIcon} Tren: <b>${td.trendLabel}</b> (${td.trendScore}/100)`);
+    lines.push(`  🔄 Konsistensi: ${td.consistency}/100`);
+    lines.push(`  📊 Data: ${td.seasonsCount} musim`);
+    lines.push(`  🔮 Prediksi PP90: ${td.predictedPP90}`);
+    if (td.changedTeam) lines.push(`  🔀 Pernah pindah klub`);
+    const opG = td.overperformance.goals;
+    const opA = td.overperformance.assists;
+    if (Math.abs(opG) > 1 || Math.abs(opA) > 1) {
+      lines.push(`  ⚡ Overperformance kumulatif: Goals ${opG >= 0 ? '+' : ''}${opG} | Assists ${opA >= 0 ? '+' : ''}${opA}`);
+    }
+    lines.push('');
+  } else {
+    lines.push('<i>📜 Data historis tidak tersedia (pemain baru/promosi)</i>');
+    lines.push('');
+  }
+
   // === Final Verdict ===
   lines.push('<b>🏁 VERDICT</b>');
   const verdicts = [];
@@ -477,11 +503,93 @@ function analyzeCard(p, currentGw) {
   }
 
   if (s.label === 'DIFFERENTIAL') verdicts.push('💎 Differential pick — ownership rendah');
+  if (s.regression === 'CLINICAL_FINISHER') verdicts.push('🎯 Clinical finisher — overperformance = skill');
   if (s.regression === 'UNDERPERFORMING') verdicts.push('📈 Potensi regresi naik — value buy');
   if (s.regression === 'OVERPERFORMING') verdicts.push('📉 Hati-hati regresi turun');
+  if (s.regression === 'POOR_FINISHER') verdicts.push('⚠️ Poor finisher — jangan harap outperform xG');
   if (!s.minutesSafe) verdicts.push('🚨 Risiko menit bermain');
+  if (s.trendData?.trendLabel === 'IMPROVING') verdicts.push('📈 Tren naik — performa membaik multi-musim');
+  if (s.trendData?.trendLabel === 'DECLINING') verdicts.push('📉 Tren turun — hati-hati penurunan performa');
+  if (s.trendData?.consistency >= 80) verdicts.push('🔒 Sangat konsisten — low risk pick');
 
   lines.push(verdicts.join('\n'));
+
+  return lines.join('\n');
+}
+
+function historyCard(p, trend) {
+  const lines = [
+    `<b>📜 DATA HISTORIS 3 MUSIM</b>`,
+    ``,
+    `<b>${p.web_name}</b> — ${posLabel(p.element_type)}`,
+    `${p.teamData?.name || 'Unknown'} | ${priceStr(p.now_cost)}`,
+    ``,
+  ];
+
+  if (!trend) {
+    lines.push('<i>Tidak ada data historis untuk pemain ini.</i>');
+    lines.push('Kemungkinan: pemain baru, baru promosi, atau nama berubah.');
+    return lines.join('\n');
+  }
+
+  // === Trend Overview ===
+  const trendIcon = trend.trendLabel === 'IMPROVING' ? '📈' : trend.trendLabel === 'DECLINING' ? '📉' : '➡️';
+  lines.push(`${trendIcon} <b>Tren: ${trend.trendLabel}</b> — Skor: ${trend.trendScore}/100`);
+  lines.push(`🔄 Konsistensi: ${trend.consistency}/100`);
+  if (trend.changedTeam) lines.push('🔀 Pernah pindah klub selama 3 musim');
+  lines.push('');
+
+  // === Per-Season Breakdown ===
+  lines.push('<b>📊 Data Per Musim</b>');
+  lines.push('');
+
+  for (const s of trend.seasons) {
+    const pos = { 1: 'GK', 2: 'DEF', 3: 'MID', 4: 'FWD' }[s.position] || '?';
+    lines.push(`<b>${s.season}</b>`);
+    lines.push(`  Menit: ${s.minutes} | Start: ${s.starts} | Pts: ${s.totalPoints}`);
+    lines.push(`  PPG: ${s.ppg} | PP90: ${s.pp90.toFixed(2)}`);
+    lines.push(`  Goals: ${s.goals} (xG: ${s.xg.toFixed(1)}) | Assists: ${s.assists} (xA: ${s.xa.toFixed(1)})`);
+    lines.push(`  xGI/90: ${s.xgi90.toFixed(2)} | CS: ${s.cleanSheets} | Bonus: ${Math.round(s.bonus90 * 10) / 10}/90`);
+    lines.push(`  ICT: ${s.ict} | Harga: ${priceStr(s.cost)}`);
+    lines.push('');
+  }
+
+  // === Trend Components ===
+  lines.push('<b>📈 Analisis Tren</b>');
+  const arw = (v) => v > 0.15 ? '📈' : v < -0.15 ? '📉' : '➡️';
+  const tc = trend.components;
+  lines.push(`  ${arw(tc.pp90)} PP90: ${tc.pp90 > 0 ? '+' : ''}${(tc.pp90 * 100).toFixed(0)}% (R²: ${(trend.trends.pp90.r2 * 100).toFixed(0)}%)`);
+  lines.push(`  ${arw(tc.xgi90)} xGI/90: ${tc.xgi90 > 0 ? '+' : ''}${(tc.xgi90 * 100).toFixed(0)}%`);
+  lines.push(`  ${arw(tc.minutes)} Menit: ${tc.minutes > 0 ? '+' : ''}${(tc.minutes * 100).toFixed(0)}%`);
+  lines.push(`  ${arw(tc.ict)} ICT: ${tc.ict > 0 ? '+' : ''}${(tc.ict * 100).toFixed(0)}%`);
+  lines.push('');
+
+  // === Overperformance ===
+  const opG = trend.overperformance.goals;
+  const opA = trend.overperformance.assists;
+  lines.push('<b>⚡ Overperformance Kumulatif (3 Musim)</b>');
+  lines.push(`  Goals vs xG: ${opG >= 0 ? '+' : ''}${opG} ${opG > 3 ? '(clinical!)' : opG < -3 ? '(poor finisher)' : '(normal)'}`);
+  lines.push(`  Assists vs xA: ${opA >= 0 ? '+' : ''}${opA}`);
+  lines.push('');
+
+  // === Prediction ===
+  lines.push('<b>🔮 Prediksi</b>');
+  lines.push(`  Estimated PP90 next season: <b>${trend.predictedPP90}</b>`);
+
+  const lastSeason = trend.seasons[trend.seasons.length - 1];
+  if (lastSeason) {
+    const diff = trend.predictedPP90 - lastSeason.pp90;
+    if (diff > 0.3) {
+      lines.push(`  📈 Diperkirakan <b>naik</b> dari musim lalu`);
+    } else if (diff < -0.3) {
+      lines.push(`  📉 Diperkirakan <b>turun</b> dari musim lalu`);
+    } else {
+      lines.push(`  ➡️ Diperkirakan <b>stabil</b>`);
+    }
+  }
+
+  lines.push('');
+  lines.push(`<i>💡 Gunakan /analyze ${p.web_name} untuk analisis lengkap musim ini</i>`);
 
   return lines.join('\n');
 }
@@ -490,5 +598,5 @@ module.exports = {
   playerCard, compareCard, rankingList, fixtureTable,
   priceChangeNotif, statusChangeNotif, squadCard, transferSuggestions,
   trendingCard, trendingOutCard, netTransferCard,
-  analyzeCard, posLabel, priceStr,
+  analyzeCard, historyCard, posLabel, priceStr,
 };
