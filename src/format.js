@@ -243,8 +243,92 @@ function transferSuggestions(suggestions) {
   return lines.join('\n');
 }
 
+function trendingCard(transfersIn, transfersOut, currentGw) {
+  const lines = [`<b>🔥 Trending Transfers — GW${currentGw}</b>\n`];
+
+  // Transfer IN
+  lines.push('<b>📈 Most Transferred IN (Hype)</b>');
+  lines.push('─────────────────');
+  transfersIn.slice(0, 15).forEach((p, i) => {
+    const medal = i < 3 ? ['🥇', '🥈', '🥉'][i] : `${i + 1}.`;
+    const qIcon = p.scoring.qualityScore >= 70 ? '🟢' : p.scoring.qualityScore >= 40 ? '🟡' : '🔴';
+    lines.push(
+      `${medal} <b>${p.web_name}</b> (${p.teamData?.short_name || '?'}) — ` +
+      `+${p.transfers_in_event.toLocaleString()}`
+    );
+    lines.push(
+      `     ${qIcon}Q:${p.scoring.qualityScore} | ${priceStr(p.now_cost)} | ` +
+      `EO:${p.selected_by_percent}% | ${p.scoring.label}`
+    );
+  });
+
+  lines.push('');
+
+  // Transfer OUT
+  lines.push('<b>📉 Most Transferred OUT (Ditinggalkan)</b>');
+  lines.push('─────────────────');
+  transfersOut.slice(0, 15).forEach((p, i) => {
+    const medal = i < 3 ? ['🥇', '🥈', '🥉'][i] : `${i + 1}.`;
+    const reasons = [];
+    if (p.status !== 'a') reasons.push(p.status === 'i' ? '🏥 Cedera' : p.status === 's' ? '❌ Suspended' : '⚠️ Doubtful');
+    if (p.scoring.regression === 'OVERPERFORMING') reasons.push('📉 Overperform');
+    const reasonStr = reasons.length > 0 ? ` [${reasons.join(', ')}]` : '';
+
+    lines.push(
+      `${medal} <b>${p.web_name}</b> (${p.teamData?.short_name || '?'}) — ` +
+      `-${p.transfers_out_event.toLocaleString()}${reasonStr}`
+    );
+    lines.push(
+      `     Q:${p.scoring.qualityScore} | ${priceStr(p.now_cost)} | ` +
+      `EO:${p.selected_by_percent}%`
+    );
+  });
+
+  lines.push('\n<i>💡 Transfer banyak ≠ selalu bagus. Cek quality score & fixture sebelum ikut-ikutan.</i>');
+  return lines.join('\n');
+}
+
+function netTransferCard(players, currentGw) {
+  const lines = [`<b>⚡ Net Transfers — GW${currentGw}</b>\n`];
+
+  // Hitung net transfer
+  const withNet = players
+    .filter(p => p.minutes > 0)
+    .map(p => ({
+      ...p,
+      netTransfer: p.transfers_in_event - p.transfers_out_event,
+    }));
+
+  // Top gainers
+  const gainers = [...withNet].sort((a, b) => b.netTransfer - a.netTransfer).slice(0, 10);
+  // Top losers
+  const losers = [...withNet].sort((a, b) => a.netTransfer - b.netTransfer).slice(0, 10);
+
+  lines.push('<b>🚀 Top Gainers (Net Transfer +)</b>');
+  gainers.forEach((p, i) => {
+    const icon = i < 3 ? '🔥' : '📈';
+    lines.push(
+      `${icon} <b>${p.web_name}</b> (${p.teamData?.short_name || '?'}) — ` +
+      `<b>+${p.netTransfer.toLocaleString()}</b> | Q:${p.scoring.qualityScore} | ${priceStr(p.now_cost)}`
+    );
+  });
+
+  lines.push('');
+  lines.push('<b>🧊 Top Losers (Net Transfer -)</b>');
+  losers.forEach((p, i) => {
+    const icon = i < 3 ? '💀' : '📉';
+    lines.push(
+      `${icon} <b>${p.web_name}</b> (${p.teamData?.short_name || '?'}) — ` +
+      `<b>${p.netTransfer.toLocaleString()}</b> | Q:${p.scoring.qualityScore} | ${priceStr(p.now_cost)}`
+    );
+  });
+
+  return lines.join('\n');
+}
+
 module.exports = {
   playerCard, compareCard, rankingList, fixtureTable,
   priceChangeNotif, statusChangeNotif, squadCard, transferSuggestions,
+  trendingCard, netTransferCard,
   posLabel, priceStr,
 };

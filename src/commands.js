@@ -69,6 +69,8 @@ function registerCommands(bot) {
       '<b>👤 Squad & Transfer:</b>',
       '/squad &lt;FPL ID&gt; — Lihat squad lengkap',
       '/suggest &lt;FPL ID&gt; — Saran transfer terbaik',
+      '/trending — Transfer in/out terpopuler',
+      '/nettransfer — Net transfer (gainers vs losers)',
       '',
       '<b>📰 Info & Berita:</b>',
       '/news — Semua berita (X + IG)',
@@ -235,6 +237,37 @@ function registerCommands(bot) {
       ctx.replyWithHTML(lines.join('\n'));
     } catch (err) {
       console.error('Error /regression:', err.message);
+      ctx.reply('❌ Gagal mengambil data.');
+    }
+  });
+
+  // /trending — Transfer in/out terpopuler
+  bot.command('trending', async ctx => {
+    try {
+      const { scored, currentGw } = await getScoredPlayers();
+
+      const transfersIn = [...scored]
+        .filter(p => p.transfers_in_event > 0)
+        .sort((a, b) => b.transfers_in_event - a.transfers_in_event);
+
+      const transfersOut = [...scored]
+        .filter(p => p.transfers_out_event > 0)
+        .sort((a, b) => b.transfers_out_event - a.transfers_out_event);
+
+      ctx.replyWithHTML(fmt.trendingCard(transfersIn, transfersOut, currentGw));
+    } catch (err) {
+      console.error('Error /trending:', err.message);
+      ctx.reply('❌ Gagal mengambil data.');
+    }
+  });
+
+  // /nettransfer — Net transfer (gainers vs losers)
+  bot.command('nettransfer', async ctx => {
+    try {
+      const { scored, currentGw } = await getScoredPlayers();
+      ctx.replyWithHTML(fmt.netTransferCard(scored, currentGw));
+    } catch (err) {
+      console.error('Error /nettransfer:', err.message);
       ctx.reply('❌ Gagal mengambil data.');
     }
   });
