@@ -88,7 +88,7 @@ async function fetchTweets(username, count = 5) {
 // =====================
 
 // Metode 1: Via RSS-Bridge (publik, gratis, paling reliable)
-async function fetchInstagramViaBridge(username, count = 3) {
+async function fetchInstagramViaBridge(username, count = 2) {
   const endpoints = [
     `https://rss-bridge.org/bridge01/?action=display&bridge=Instagram&context=Username&u=${username}&media_type=all&format=Json`,
   ];
@@ -103,6 +103,10 @@ async function fetchInstagramViaBridge(username, count = 3) {
       });
 
       const items = (data.items || []).slice(0, count).map(item => {
+        // Extract image URL dari content_html
+        const imgMatch = (item.content_html || '').match(/<img[^>]+src="([^"]+)"/i);
+        const imageUrl = imgMatch ? imgMatch[1] : null;
+
         // Bersihkan HTML dari content
         const cleanText = (item.content_html || item.title || '')
           .replace(/<a[^>]*>.*?<\/a>/gi, '')
@@ -120,6 +124,7 @@ async function fetchInstagramViaBridge(username, count = 3) {
           text: sanitizeText(cleanText || item.title || '(tanpa caption)'),
           date: item.date_modified || item.date_published || '',
           url: item.url || `https://instagram.com/${username}`,
+          imageUrl,
         };
       });
 
@@ -133,7 +138,7 @@ async function fetchInstagramViaBridge(username, count = 3) {
 }
 
 // Metode 2: Via RSSHub (fallback)
-async function fetchInstagramViaRSS(username, count = 3) {
+async function fetchInstagramViaRSS(username, count = 2) {
   const endpoints = [
     `https://rsshub.app/instagram/user/${username}`,
     `https://rsshub.rssforever.com/instagram/user/${username}`,
@@ -185,7 +190,7 @@ async function fetchInstagramViaRSS(username, count = 3) {
 }
 
 // Gabungan: coba RSS-Bridge dulu, fallback ke RSSHub
-async function fetchInstagramPosts(username, count = 3) {
+async function fetchInstagramPosts(username, count = 2) {
   let posts = await fetchInstagramViaBridge(username, count);
   if (posts.length === 0) {
     posts = await fetchInstagramViaRSS(username, count);
@@ -216,7 +221,7 @@ async function fetchAllInstagramNews() {
 
   // Fetch sequentially untuk IG (hindari rate limit)
   for (const acc of FPL_ACCOUNTS_IG) {
-    const posts = await fetchInstagramPosts(acc.username, 3);
+    const posts = await fetchInstagramPosts(acc.username, 2);
     if (posts.length > 0) {
       results.push({ platform: 'IG', account: acc, posts });
     }
@@ -253,14 +258,14 @@ async function fetchAccountNews(query, platform = null) {
       a.username.toLowerCase().includes(q) || a.label.toLowerCase().includes(q)
     );
     if (igAcc) {
-      const posts = await fetchInstagramPosts(igAcc.username, 5);
+      const posts = await fetchInstagramPosts(igAcc.username, 2);
       return { platform: 'IG', account: igAcc, posts };
     }
   }
 
   // Coba sebagai username langsung
   if (platform === 'ig') {
-    const posts = await fetchInstagramPosts(query, 5);
+    const posts = await fetchInstagramPosts(query, 2);
     return { platform: 'IG', account: { username: query, label: query }, posts };
   }
 
@@ -344,6 +349,48 @@ function formatSingleAccount(result) {
     return `❌ Tidak ada post dari @${result?.account?.username || '?'} (${result?.platform || '?'})`;
   }
   return formatNews([result]);
+}
+
+// Kirim IG posts dengan gambar via Telegram sendPhoto
+async function sendIgPostsWithImages(ctx, igResults) {
+  if (igResults.length === 0) return false;
+
+  for (const { account, posts } of igResults) {
+    if (posts.length === 0) continue;
+
+    for (const p of posts) {
+      let caption = `📸 <b>@${account.username}</b>\n\n`;
+      let text = sanitizeText(p.text.replace(/<[^>]+>/g, '').replace(/\n+/g, ' '));
+      if (text.length > 800) text = text.substring(0, 797) + '...';
+      caption += escapeHtml(text);
+
+      if (p.date) {
+        const time = new Date(p.date).toLocaleString('id-ID', {
+          day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+        });
+        caption += `\n\n<i>${time}</i>`;
+      }
+      caption += `\n<a href="${p.url}">Buka di Instagram</a>`;
+
+      // Kirim dengan gambar jika ada
+      if (p.imageUrl) {
+        try {
+          await ctx.replyWithPhoto(p.imageUrl, {
+            caption,
+            parse_mode: 'HTML',
+          });
+          continue;
+        } catch {
+          // Fallback ke text jika gambar gagal
+        }
+      }
+
+      // Fallback tanpa gambar
+      await ctx.replyWithHTML(caption, { disable_web_page_preview: true });
+    }
+  }
+
+  return true;
 }
 
 // =====================
@@ -469,6 +516,7 @@ function formatNewsIntel(intel) {
 module.exports = {
   fetchAllFplNews, fetchAllInstagramNews, fetchAllNews,
   fetchAccountNews, formatNews, formatSingleAccount,
+  sendIgPostsWithImages,
   fetchNewsIntel, formatNewsIntel,
   FPL_ACCOUNTS_X, FPL_ACCOUNTS_IG,
 };

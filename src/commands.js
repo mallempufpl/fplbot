@@ -6,6 +6,7 @@ const fmt = require('./format');
 const {
   fetchAllNews, fetchAllFplNews, fetchAllInstagramNews,
   fetchAccountNews, formatNews, formatSingleAccount,
+  sendIgPostsWithImages,
   fetchNewsIntel, formatNewsIntel,
   FPL_ACCOUNTS_X, FPL_ACCOUNTS_IG,
 } = require('./news');
@@ -524,17 +525,37 @@ function registerCommands(bot) {
 
       if (query) {
         const result = await fetchAccountNews(query, platform);
-        ctx.replyWithHTML(formatSingleAccount(result), { disable_web_page_preview: true });
+        // IG dengan gambar
+        if (result && result.platform === 'IG' && result.posts.length > 0) {
+          await sendIgPostsWithImages(ctx, [result]);
+        } else {
+          ctx.replyWithHTML(formatSingleAccount(result), { disable_web_page_preview: true });
+        }
       } else if (platform === 'x') {
         const results = await fetchAllFplNews();
         ctx.replyWithHTML(formatNews(results), { disable_web_page_preview: true });
       } else if (platform === 'ig') {
         const results = await fetchAllInstagramNews();
-        ctx.replyWithHTML(formatNews(results), { disable_web_page_preview: true });
+        if (results.length > 0) {
+          await sendIgPostsWithImages(ctx, results);
+        } else {
+          ctx.reply('❌ Tidak bisa mengambil berita Instagram saat ini.');
+        }
       } else {
-        // Semua platform
-        const results = await fetchAllNews();
-        ctx.replyWithHTML(formatNews(results), { disable_web_page_preview: true });
+        // Semua platform — X sebagai text, IG dengan gambar
+        const [xResults, igResults] = await Promise.all([
+          fetchAllFplNews(),
+          fetchAllInstagramNews(),
+        ]);
+        if (xResults.length > 0) {
+          ctx.replyWithHTML(formatNews(xResults), { disable_web_page_preview: true });
+        }
+        if (igResults.length > 0) {
+          await sendIgPostsWithImages(ctx, igResults);
+        }
+        if (xResults.length === 0 && igResults.length === 0) {
+          ctx.reply('❌ Tidak bisa mengambil berita saat ini. Coba lagi nanti.');
+        }
       }
     } catch (err) {
       console.error('Error /news:', err.message);
