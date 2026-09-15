@@ -87,7 +87,52 @@ async function fetchTweets(username, count = 5) {
 // INSTAGRAM
 // =====================
 
-// Metode 1: Via RSSHub (publik, gratis)
+// Metode 1: Via RSS-Bridge (publik, gratis, paling reliable)
+async function fetchInstagramViaBridge(username, count = 3) {
+  const endpoints = [
+    `https://rss-bridge.org/bridge01/?action=display&bridge=Instagram&context=Username&u=${username}&media_type=all&format=Json`,
+  ];
+
+  for (const url of endpoints) {
+    try {
+      const { data } = await axios.get(url, {
+        timeout: 15000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+      });
+
+      const items = (data.items || []).slice(0, count).map(item => {
+        // Bersihkan HTML dari content
+        const cleanText = (item.content_html || item.title || '')
+          .replace(/<a[^>]*>.*?<\/a>/gi, '')
+          .replace(/<img[^>]*>/gi, '')
+          .replace(/<br\s*\/?>/gi, ' ')
+          .replace(/<[^>]+>/g, '')
+          .replace(/&amp;/g, '&')
+          .replace(/&lt;/g, '<')
+          .replace(/&gt;/g, '>')
+          .replace(/&#\d+;/g, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+
+        return {
+          text: sanitizeText(cleanText || item.title || '(tanpa caption)'),
+          date: item.date_modified || item.date_published || '',
+          url: item.url || `https://instagram.com/${username}`,
+        };
+      });
+
+      if (items.length > 0) return items;
+    } catch {
+      continue;
+    }
+  }
+
+  return [];
+}
+
+// Metode 2: Via RSSHub (fallback)
 async function fetchInstagramViaRSS(username, count = 3) {
   const endpoints = [
     `https://rsshub.app/instagram/user/${username}`,
@@ -104,7 +149,6 @@ async function fetchInstagramViaRSS(username, count = 3) {
         },
       });
 
-      // Parse XML sederhana (tanpa dependency tambahan)
       const items = [];
       const itemRegex = /<item>([\s\S]*?)<\/item>/g;
       let match;
@@ -115,7 +159,6 @@ async function fetchInstagramViaRSS(username, count = 3) {
         const pubDate = extractTag(itemXml, 'pubDate');
         const desc = extractTag(itemXml, 'description');
 
-        // Bersihkan HTML dari description
         const cleanDesc = desc
           .replace(/<br\s*\/?>/gi, ' ')
           .replace(/<[^>]+>/g, '')
@@ -141,52 +184,11 @@ async function fetchInstagramViaRSS(username, count = 3) {
   return [];
 }
 
-// Metode 2: Via embed page scraping (fallback)
-async function fetchInstagramViaEmbed(username, count = 3) {
-  try {
-    const { data } = await axios.get(`https://www.instagram.com/${username}/`, {
-      timeout: 10000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml',
-        'Accept-Language': 'en-US,en;q=0.9',
-        ...(process.env.IG_SESSION_ID ? { 'Cookie': `sessionid=${process.env.IG_SESSION_ID}` } : {}),
-      },
-    });
-
-    // Coba extract shared data dari HTML
-    const sharedDataMatch = data.match(/window\._sharedData\s*=\s*({.+?});<\/script>/);
-    if (sharedDataMatch) {
-      const sharedData = JSON.parse(sharedDataMatch[1]);
-      const edges = sharedData?.entry_data?.ProfilePage?.[0]?.graphql?.user?.edge_owner_to_timeline_media?.edges || [];
-
-      return edges.slice(0, count).map(edge => {
-        const node = edge.node;
-        return {
-          text: sanitizeText(node.edge_media_to_caption?.edges?.[0]?.node?.text || '(tanpa caption)'),
-          date: node.taken_at_timestamp ? new Date(node.taken_at_timestamp * 1000).toISOString() : '',
-          url: `https://instagram.com/p/${node.shortcode}/`,
-        };
-      });
-    }
-
-    // Coba extract dari format baru (additional data)
-    const additionalMatch = data.match(/"xdt_api__v1__feed__user_timeline_graphql_connection":\s*({.+?})\s*}/);
-    if (additionalMatch) {
-      // Format baru lebih kompleks, skip jika tidak bisa parse
-    }
-
-    return [];
-  } catch {
-    return [];
-  }
-}
-
-// Gabungan: coba RSSHub dulu, fallback ke embed
+// Gabungan: coba RSS-Bridge dulu, fallback ke RSSHub
 async function fetchInstagramPosts(username, count = 3) {
-  let posts = await fetchInstagramViaRSS(username, count);
+  let posts = await fetchInstagramViaBridge(username, count);
   if (posts.length === 0) {
-    posts = await fetchInstagramViaEmbed(username, count);
+    posts = await fetchInstagramViaRSS(username, count);
   }
   return posts;
 }
