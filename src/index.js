@@ -55,9 +55,13 @@ async function main() {
     // Start scheduled jobs
     startScheduler(bot, CHAT_ID);
 
+    // Tunggu sebentar agar polling session lama expired (hindari 409 Conflict)
+    console.log('⏳ Waiting 3s for old session to expire...');
+    await new Promise(r => setTimeout(r, 3000));
+
     // Start bot (polling mode — works behind firewalls, no domain needed)
-    await bot.launch();
-    console.log('🤖 FPL Differential Bot is running! (v2)');
+    await bot.launch({ dropPendingUpdates: true });
+    console.log('🤖 FPL Differential Bot is running! (v3)');
     console.log(`📋 Admin CHAT_ID: ${CHAT_ID || '(not set)'}`);
 
     // Kirim notifikasi restart ke admin

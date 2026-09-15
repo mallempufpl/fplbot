@@ -163,9 +163,16 @@ function registerAdminCommands(bot) {
   bot.command('restart', async (ctx) => {
     if (!isOwner(ctx)) return ctx.reply('🚫 Hanya pemilik bot.');
 
-    await ctx.reply('🔄 Bot akan restart dalam 2 detik...\n\nBot akan kembali online secara otomatis (jika di-deploy dengan Docker/Render/Railway).');
+    await ctx.reply('🔄 Bot akan restart...');
 
     console.log('🔄 Restart requested via /restart command');
+
+    // Stop polling dulu agar session di-release, baru exit
+    try {
+      bot.stop('RESTART');
+    } catch (e) {
+      console.error('Stop error:', e.message);
+    }
 
     setTimeout(() => {
       process.exit(0); // Exit clean — process manager akan restart otomatis
