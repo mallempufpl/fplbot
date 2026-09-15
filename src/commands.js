@@ -69,7 +69,9 @@ function registerCommands(bot) {
       '<b>👤 Squad & Transfer:</b>',
       '/squad &lt;FPL ID&gt; — Lihat squad lengkap',
       '/suggest &lt;FPL ID&gt; — Saran transfer terbaik',
-      '/trending — Transfer in/out terpopuler',
+      '/trending — Transfer in &amp; out terpopuler',
+      '/trending in — Hanya transfer in',
+      '/trending out — Hanya transfer out',
       '/nettransfer — Net transfer (gainers vs losers)',
       '',
       '<b>📰 Info & Berita:</b>',
@@ -241,20 +243,33 @@ function registerCommands(bot) {
     }
   });
 
-  // /trending — Transfer in/out terpopuler
+  // /trending [in|out] — Transfer in/out terpopuler
   bot.command('trending', async ctx => {
+    const arg = ctx.message.text.replace(/^\/trending\s*/i, '').trim().toLowerCase();
+
     try {
       const { scored, currentGw } = await getScoredPlayers();
 
-      const transfersIn = [...scored]
-        .filter(p => p.transfers_in_event > 0)
-        .sort((a, b) => b.transfers_in_event - a.transfers_in_event);
+      if (arg === 'out') {
+        const transfersOut = [...scored]
+          .filter(p => p.transfers_out_event > 0)
+          .sort((a, b) => b.transfers_out_event - a.transfers_out_event);
+        ctx.replyWithHTML(fmt.trendingOutCard(transfersOut, currentGw));
+      } else {
+        // Default: transfer in
+        const transfersIn = [...scored]
+          .filter(p => p.transfers_in_event > 0)
+          .sort((a, b) => b.transfers_in_event - a.transfers_in_event);
+        ctx.replyWithHTML(fmt.trendingCard(transfersIn, currentGw));
 
-      const transfersOut = [...scored]
-        .filter(p => p.transfers_out_event > 0)
-        .sort((a, b) => b.transfers_out_event - a.transfers_out_event);
-
-      ctx.replyWithHTML(fmt.trendingCard(transfersIn, transfersOut, currentGw));
+        // Jika tanpa argumen, kirim juga transfer out sebagai pesan kedua
+        if (!arg) {
+          const transfersOut = [...scored]
+            .filter(p => p.transfers_out_event > 0)
+            .sort((a, b) => b.transfers_out_event - a.transfers_out_event);
+          ctx.replyWithHTML(fmt.trendingOutCard(transfersOut, currentGw));
+        }
+      }
     } catch (err) {
       console.error('Error /trending:', err.message);
       ctx.reply('❌ Gagal mengambil data.');
