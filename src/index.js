@@ -17,12 +17,6 @@ if (!BOT_TOKEN) {
 
 const bot = new Telegraf(BOT_TOKEN);
 
-// Log setiap update yang masuk (debug)
-bot.use((ctx, next) => {
-  console.log(`📩 Update received: ${ctx.updateType} | ${ctx.message?.text || ''}`);
-  return next();
-});
-
 // Register all commands
 registerCommands(bot);
 registerAdminCommands(bot);
@@ -39,7 +33,7 @@ bot.catch((err, ctx) => {
   console.error(`❌ Bot error for ${ctx.updateType}:`, err.message);
 });
 
-// Health check HTTP server (keeps Render/Railway alive)
+// Health check HTTP server
 const server = http.createServer((req, res) => {
   if (req.url === '/health' || req.url === '/') {
     res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -53,38 +47,23 @@ const server = http.createServer((req, res) => {
 // Start
 async function main() {
   try {
-    // Start health check server
     server.listen(PORT, () => {
       console.log(`🌐 Health check server on port ${PORT}`);
     });
 
-    // Start scheduled jobs
     startScheduler(bot, CHAT_ID);
 
-    // Hapus webhook lama jika ada, lalu start polling
-    console.log('⏳ Cleaning up old sessions...');
-    try {
-      await bot.telegram.deleteWebhook({ drop_pending_updates: false });
-    } catch (e) {
-      console.log('deleteWebhook error (ignored):', e.message);
-    }
+    // Bersihkan webhook/session lama
+    await bot.telegram.deleteWebhook({ drop_pending_updates: false });
     await new Promise(r => setTimeout(r, 3000));
 
-    console.log('🚀 Starting bot polling...');
-    bot.launch({
-      polling: { timeout: 30, limit: 100 },
-    }).catch(err => {
-      console.error('❌ Polling error:', err.message);
-    });
-
-    // Tunggu sedikit untuk pastikan polling aktif
-    await new Promise(r => setTimeout(r, 1000));
-    console.log('🤖 FPL Differential Bot is running! (v5)');
+    // Start polling — HARUS di-await
+    await bot.launch();
+    console.log('🤖 FPL Differential Bot is running! (v6)');
     console.log(`📋 Admin CHAT_ID: ${CHAT_ID || '(not set)'}`);
 
-    // Kirim notifikasi restart ke admin
+    // Kirim notifikasi ke admin
     if (CHAT_ID) {
-      console.log('📨 Sending startup notification to CHAT_ID:', CHAT_ID);
       try {
         await bot.telegram.sendMessage(CHAT_ID,
           '✅ <b>Bot sudah online!</b>\n\n' +
@@ -92,21 +71,32 @@ async function main() {
           'Ketik /start untuk lihat daftar perintah.',
           { parse_mode: 'HTML' }
         );
-        console.log('✅ Startup notification sent');
       } catch (e) {
-        console.error('❌ Failed to send startup notification:', e.message);
+        console.error('❌ Notification error:', e.message);
       }
-    } else {
-      console.log('⚠️ CHAT_ID not set, skipping startup notification');
     }
   } catch (err) {
     console.error('❌ Failed to start:', err.message);
-    process.exit(1);
+    // Retry setelah 5 detik (untuk handle 409 Conflict)
+    console.log('🔁 Retrying in 5 seconds...');
+    await new Promise(r => setTimeout(r, 5000));
+    try {
+      await bot.launch();
+      console.log('🤖 Bot started on retry! (v6)');
+      if (CHAT_ID) {
+        await bot.telegram.sendMessage(CHAT_ID,
+          '✅ <b>Bot sudah online!</b> (retry)\n\nKetik /start untuk lihat daftar perintah.',
+          { parse_mode: 'HTML' }
+        ).catch(() => {});
+      }
+    } catch (retryErr) {
+      console.error('❌ Retry failed:', retryErr.message);
+      process.exit(1);
+    }
   }
 }
 
 main();
 
-// Graceful shutdown
 process.once('SIGINT', () => { bot.stop('SIGINT'); server.close(); });
 process.once('SIGTERM', () => { bot.stop('SIGTERM'); server.close(); });
