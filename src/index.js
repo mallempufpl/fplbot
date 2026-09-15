@@ -59,6 +59,20 @@ async function main() {
     await bot.launch();
     console.log('🤖 FPL Differential Bot is running!');
     console.log(`📋 Admin CHAT_ID: ${CHAT_ID || '(not set)'}`);
+
+    // Kirim notifikasi restart ke admin
+    if (CHAT_ID) {
+      try {
+        await bot.telegram.sendMessage(CHAT_ID,
+          '✅ <b>Bot sudah online!</b>\n\n' +
+          `⏱ ${new Date().toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}\n\n` +
+          'Ketik /start untuk lihat daftar perintah.',
+          { parse_mode: 'HTML' }
+        );
+      } catch (e) {
+        console.error('Failed to send startup notification:', e.message);
+      }
+    }
   } catch (err) {
     console.error('❌ Failed to start:', err.message);
     process.exit(1);
