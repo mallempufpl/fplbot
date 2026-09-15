@@ -79,9 +79,11 @@ async function fetchAll() {
     for (const side of ['team_h', 'team_a']) {
       const tid = f[side];
       if (!upcomingByTeam[tid]) upcomingByTeam[tid] = [];
+      const oppId = side === 'team_h' ? f.team_a : f.team_h;
       upcomingByTeam[tid].push({
         gw: f.event,
-        opponent: side === 'team_h' ? f.team_a : f.team_h,
+        opponent: oppId,
+        opponent_name: teams[oppId]?.short_name || `Team${oppId}`,
         isHome: side === 'team_h',
         fdr: side === 'team_h' ? f.team_h_difficulty : f.team_a_difficulty,
       });
