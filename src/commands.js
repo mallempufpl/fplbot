@@ -489,7 +489,19 @@ function registerCommands(bot) {
           p.scoring.qualityScore > out.scoring.qualityScore // harus lebih baik
         );
 
-        candidates.sort((a, b) => b.scoring.qualityScore - a.scoring.qualityScore);
+        // Sort: prioritaskan pemain dengan trend bagus + quality score tinggi
+        candidates.sort((a, b) => {
+          // Bonus skor untuk trend IMPROVING, penalti untuk DECLINING
+          const trendBonus = (p) => {
+            if (!p.scoring.trendData) return 0;
+            if (p.scoring.trendData.trendLabel === 'IMPROVING') return 5;
+            if (p.scoring.trendData.trendLabel === 'DECLINING') return -5;
+            return 0;
+          };
+          const aScore = a.scoring.qualityScore + trendBonus(a);
+          const bScore = b.scoring.qualityScore + trendBonus(b);
+          return bScore - aScore;
+        });
         const best = candidates[0];
         if (!best) continue;
 
@@ -510,12 +522,33 @@ function registerCommands(bot) {
         if (!out.scoring.minutesSafe) {
           reasons.push(`${out.web_name} risiko rotasi`);
         }
+        // Regression — termasuk label historis baru
         if (out.scoring.regression === 'OVERPERFORMING') {
           reasons.push(`${out.web_name} overperforming`);
         }
         if (best.scoring.regression === 'UNDERPERFORMING') {
           reasons.push(`${best.web_name} potensi regresi naik`);
         }
+        if (best.scoring.regression === 'CLINICAL_FINISHER') {
+          reasons.push(`${best.web_name} clinical finisher (multi-musim)`);
+        }
+        // Trend historis
+        if (best.scoring.trendData?.trendLabel === 'IMPROVING') {
+          reasons.push(`${best.web_name} tren naik ${best.scoring.trendData.seasonsCount} musim`);
+        }
+        if (out.scoring.trendData?.trendLabel === 'DECLINING') {
+          reasons.push(`${out.web_name} tren menurun`);
+        }
+        if (best.scoring.trendData?.consistency >= 80) {
+          reasons.push(`${best.web_name} sangat konsisten`);
+        }
+        if (out.scoring.regression === 'POOR_FINISHER') {
+          reasons.push(`${out.web_name} poor finisher (multi-musim)`);
+        }
+
+        // Trend info untuk tampilan
+        const outTrend = out.scoring.trendData;
+        const inTrend = best.scoring.trendData;
 
         suggestions.push({
           out: {
@@ -523,12 +556,18 @@ function registerCommands(bot) {
             teamShort: out.teamData?.short_name || '?',
             qualityScore: out.scoring.qualityScore,
             nowCost: out.now_cost,
+            trendLabel: outTrend?.trendLabel || null,
+            trendScore: outTrend?.trendScore || null,
+            consistency: outTrend?.consistency || null,
           },
           in: {
             web_name: best.web_name,
             teamShort: best.teamData?.short_name || '?',
             qualityScore: best.scoring.qualityScore,
             nowCost: best.now_cost,
+            trendLabel: inTrend?.trendLabel || null,
+            trendScore: inTrend?.trendScore || null,
+            consistency: inTrend?.consistency || null,
           },
           scoreDiff,
           costDiff: out.now_cost - best.now_cost,

@@ -229,17 +229,25 @@ function transferSuggestions(suggestions) {
 
   suggestions.forEach((s, i) => {
     const priority = i === 0 ? '🔥' : i === 1 ? '⭐' : '💡';
+
+    // Trend badges
+    const trendBadge = (t) => {
+      if (!t.trendLabel) return '';
+      const icon = t.trendLabel === 'IMPROVING' ? '📈' : t.trendLabel === 'DECLINING' ? '📉' : '➡️';
+      return ` ${icon}${t.trendScore}`;
+    };
+
     lines.push(
       `${priority} <b>Prioritas ${i + 1}</b>`,
-      `  ❌ OUT: <b>${s.out.web_name}</b> (${s.out.teamShort}) — Q:${s.out.qualityScore} | ${priceStr(s.out.nowCost)}`,
-      `  ✅ IN:  <b>${s.in.web_name}</b> (${s.in.teamShort}) — Q:${s.in.qualityScore} | ${priceStr(s.in.nowCost)}`,
+      `  ❌ OUT: <b>${s.out.web_name}</b> (${s.out.teamShort}) — Q:${s.out.qualityScore} | ${priceStr(s.out.nowCost)}${trendBadge(s.out)}`,
+      `  ✅ IN:  <b>${s.in.web_name}</b> (${s.in.teamShort}) — Q:${s.in.qualityScore} | ${priceStr(s.in.nowCost)}${trendBadge(s.in)}`,
       `  📈 Skor naik: +${s.scoreDiff} | 💰 ${s.costDiff >= 0 ? 'Hemat' : 'Tambah'}: ${priceStr(Math.abs(s.costDiff))}`,
       `  💬 ${s.reason}`,
       '',
     );
   });
 
-  lines.push('<i>⚠️ Saran berdasarkan quality score & fixture. Pertimbangkan juga konteks tim kamu.</i>');
+  lines.push('<i>⚠️ Saran berdasarkan quality score, fixture & tren historis 3 musim.</i>');
   return lines.join('\n');
 }
 
