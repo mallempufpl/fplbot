@@ -1,7 +1,10 @@
 const { fetchAll, fetchManagerInfo, fetchManagerPicks } = require('./fpl-api');
 const { scoreAllPlayers } = require('./scoring');
 const { addToWatchlist, removeFromWatchlist, getWatchlist } = require('./database');
-const { POSITION_NAMES } = require('./config');
+const {
+  POSITION_NAMES, POSITION_EMOJI, ALL_METRICS, METRIC_LABELS,
+  getActiveMetrics, getPositionWeights, DEFAULT_WEIGHTS,
+} = require('./config');
 const fmt = require('./format');
 const {
   fetchAllNews, fetchAllFplNews, fetchAllInstagramNews,
@@ -61,6 +64,7 @@ function registerCommands(bot) {
       '',
       '<b>📊 Analisa Pemain:</b>',
       '/player &lt;nama&gt; — Detail pemain',
+      '/analyze &lt;nama&gt; — Analisa mendalam pemain',
       '/compare &lt;A&gt; vs &lt;B&gt; — Bandingkan 2 pemain',
       '/best &lt;posisi&gt; — Top pemain per posisi',
       '/differentials [posisi] — Top differential picks',
@@ -91,6 +95,13 @@ function registerCommands(bot) {
       '/watch &lt;nama&gt; — Tambah ke watchlist',
       '/unwatch &lt;nama&gt; — Hapus dari watchlist',
       '/watchlist — Lihat watchlist',
+      '',
+      '<b>⚙️ Metrik & Config:</b>',
+      '/metrics — Lihat konfigurasi metrik scoring',
+      '/metrics on &lt;metric&gt; — Aktifkan metrik',
+      '/metrics off &lt;metric&gt; — Nonaktifkan metrik',
+      '/metrics weight &lt;metric&gt; GK DEF MID FWD',
+      '/metrics reset — Reset ke default',
       '',
       '<b>⚙️ Admin:</b>',
       '/setenv &lt;KEY&gt; &lt;VALUE&gt; — Update config',
@@ -635,6 +646,131 @@ function registerCommands(bot) {
     lines.push('\n<i>Username tanpa @, pisahkan dengan koma</i>');
 
     ctx.replyWithHTML(lines.join('\n'));
+  });
+
+  // /metrics — lihat dan kelola metrik scoring
+  bot.command('metrics', async ctx => {
+    const args = ctx.message.text.replace(/^\/metrics\s*/i, '').trim();
+    const parts = args.split(/\s+/);
+    const action = parts[0]?.toLowerCase();
+
+    // /metrics — tampilkan konfigurasi saat ini
+    if (!action) {
+      const active = getActiveMetrics();
+      const weights = getPositionWeights();
+      const lines = ['<b>⚙️ Konfigurasi Metrik Scoring</b>\n'];
+
+      for (const metric of ALL_METRICS) {
+        const isOn = active.includes(metric);
+        const icon = isOn ? '✅' : '❌';
+        lines.push(`${icon} <b>${metric.toUpperCase()}</b> — ${METRIC_LABELS[metric]}`);
+        if (isOn) {
+          const w = [1, 2, 3, 4].map(pos =>
+            `${POSITION_NAMES[pos]}:${Math.round(weights[pos][metric] * 100)}%`
+          ).join(' · ');
+          lines.push(`      ${w}`);
+        }
+        lines.push('');
+      }
+
+      lines.push('<b>Perintah:</b>');
+      lines.push('<code>/metrics on &lt;metric&gt;</code> — Aktifkan metrik');
+      lines.push('<code>/metrics off &lt;metric&gt;</code> — Nonaktifkan metrik');
+      lines.push('<code>/metrics weight &lt;metric&gt; &lt;GK&gt; &lt;DEF&gt; &lt;MID&gt; &lt;FWD&gt;</code>');
+      lines.push('<code>/metrics reset</code> — Reset ke default');
+      lines.push('\n<i>Metrik: xgi, form, fixture, minutes, value, def</i>');
+
+      return ctx.replyWithHTML(lines.join('\n'));
+    }
+
+    // /metrics on <metric>
+    if (action === 'on') {
+      const metric = parts[1]?.toLowerCase();
+      if (!metric || !ALL_METRICS.includes(metric)) {
+        return ctx.reply(`❌ Metrik tidak valid. Pilih: ${ALL_METRICS.join(', ')}`);
+      }
+      const active = getActiveMetrics();
+      if (active.includes(metric)) return ctx.reply(`✅ ${metric.toUpperCase()} sudah aktif.`);
+      active.push(metric);
+      process.env.METRICS_ACTIVE = active.join(',');
+      cachedScored = null; cacheTs = 0;
+      return ctx.reply(`✅ ${metric.toUpperCase()} diaktifkan. Data akan di-recalculate.`);
+    }
+
+    // /metrics off <metric>
+    if (action === 'off') {
+      const metric = parts[1]?.toLowerCase();
+      if (!metric || !ALL_METRICS.includes(metric)) {
+        return ctx.reply(`❌ Metrik tidak valid. Pilih: ${ALL_METRICS.join(', ')}`);
+      }
+      const active = getActiveMetrics().filter(m => m !== metric);
+      if (active.length === 0) return ctx.reply('❌ Tidak bisa menonaktifkan semua metrik.');
+      process.env.METRICS_ACTIVE = active.join(',');
+      cachedScored = null; cacheTs = 0;
+      return ctx.reply(`❌ ${metric.toUpperCase()} dinonaktifkan. Data akan di-recalculate.`);
+    }
+
+    // /metrics weight <metric> <GK> <DEF> <MID> <FWD>
+    if (action === 'weight') {
+      const metric = parts[1]?.toLowerCase();
+      if (!metric || !ALL_METRICS.includes(metric)) {
+        return ctx.reply(`❌ Metrik tidak valid. Pilih: ${ALL_METRICS.join(', ')}`);
+      }
+      if (parts.length < 6) {
+        return ctx.replyWithHTML(
+          `<b>Format:</b> <code>/metrics weight ${metric} GK DEF MID FWD</code>\n\n` +
+          `Contoh: <code>/metrics weight xgi 5 15 32 38</code>\n` +
+          `<i>Nilai dalam persen (0-100). Akan di-normalize otomatis.</i>`
+        );
+      }
+      const vals = parts.slice(2, 6).map(Number);
+      if (vals.some(isNaN)) return ctx.reply('❌ Semua nilai harus angka.');
+
+      // Update env
+      const currentWeights = process.env.METRICS_WEIGHTS || '';
+      const entries = currentWeights ? currentWeights.split(',').filter(e => !e.startsWith(metric + ':')) : [];
+      entries.push(`${metric}:${vals.join(':')}`);
+      process.env.METRICS_WEIGHTS = entries.join(',');
+      cachedScored = null; cacheTs = 0;
+
+      return ctx.replyWithHTML(
+        `✅ <b>${metric.toUpperCase()}</b> weights updated:\n` +
+        `GK:${vals[0]}% · DEF:${vals[1]}% · MID:${vals[2]}% · FWD:${vals[3]}%\n\n` +
+        `<i>Data akan di-recalculate otomatis.</i>`
+      );
+    }
+
+    // /metrics reset
+    if (action === 'reset') {
+      delete process.env.METRICS_ACTIVE;
+      delete process.env.METRICS_WEIGHTS;
+      cachedScored = null; cacheTs = 0;
+      return ctx.reply('✅ Metrik di-reset ke default. Data akan di-recalculate.');
+    }
+
+    ctx.reply('❓ Perintah tidak dikenal. Ketik /metrics untuk lihat opsi.');
+  });
+
+  // /analyze <nama> — Analisa mendalam pemain
+  bot.command('analyze', async ctx => {
+    const query = ctx.message.text.replace(/^\/analyze\s*/i, '').trim();
+    if (!query) return ctx.reply('Gunakan: /analyze <nama pemain>');
+
+    try {
+      const { scored, teams, currentGw } = await getScoredPlayers();
+      const result = findPlayer(scored, query);
+
+      if (!result) return ctx.reply(`❌ Pemain "${query}" tidak ditemukan.`);
+      if (Array.isArray(result)) {
+        const names = result.slice(0, 10).map(p => `• ${p.web_name} (${p.teamData?.short_name || '?'})`);
+        return ctx.replyWithHTML(`Ditemukan ${result.length} pemain:\n${names.join('\n')}\n\nCoba lebih spesifik.`);
+      }
+
+      ctx.replyWithHTML(fmt.analyzeCard(result, currentGw));
+    } catch (err) {
+      console.error('Error /analyze:', err.message);
+      ctx.reply('❌ Gagal mengambil data.');
+    }
   });
 
   // /refresh

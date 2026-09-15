@@ -8,6 +8,7 @@ const ALLOWED_KEYS = [
   'BOT_TOKEN', 'CHAT_ID', 'FPL_ID', 'PORT',
   'EMAIL', 'IG_SESSION_ID', 'ADMIN_SECRET',
   'X_ACCOUNTS', 'IG_ACCOUNTS',
+  'METRICS_ACTIVE', 'METRICS_WEIGHTS',
 ];
 
 // Key yang nilainya di-mask saat ditampilkan

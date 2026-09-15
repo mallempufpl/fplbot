@@ -1,4 +1,4 @@
-const { POSITION_NAMES, POSITION_EMOJI } = require('./config');
+const { POSITION_NAMES, POSITION_EMOJI, getActiveMetrics, getPositionWeights, METRIC_LABELS } = require('./config');
 
 function posLabel(elementType) {
   return `${POSITION_EMOJI[elementType] || ''} ${POSITION_NAMES[elementType] || '?'}`;
@@ -354,9 +354,141 @@ function netTransferCard(players, currentGw) {
   return lines.join('\n');
 }
 
+function analyzeCard(p, currentGw) {
+  const s = p.scoring;
+  const active = getActiveMetrics();
+  const weights = getPositionWeights()[p.element_type];
+
+  const lines = [
+    `<b>🔬 ANALISIS MENDALAM</b>`,
+    ``,
+    `<b>${p.web_name}</b> — ${posLabel(p.element_type)}`,
+    `${p.teamData?.name || 'Unknown'} | ${priceStr(p.now_cost)} | EO: ${p.selected_by_percent}%`,
+    ``,
+  ];
+
+  // === Quality & Differential Score ===
+  const qIcon = colorIcon(s.qualityScore);
+  lines.push(`${qIcon} <b>Quality Score: ${s.qualityScore}/100</b>`);
+  lines.push(`🎯 <b>Differential Score: ${s.differentialScore}/100</b>`);
+  lines.push(`🏷 Label: <b>${s.label}</b>`);
+  lines.push('');
+
+  // === Metric Components ===
+  lines.push('<b>📊 Komponen Metrik (aktif)</b>');
+  lines.push('');
+
+  const metricKeys = {
+    xgi: 'xGI/90',
+    form: 'Form',
+    fixture: 'Fixture',
+    minutes: 'Minutes',
+    value: 'Value',
+    def: 'Defense',
+  };
+
+  for (const metric of active) {
+    const val = s.components[metric] || 0;
+    const w = weights[metric] || 0;
+    const pct = (val * 100).toFixed(0);
+    const wPct = Math.round(w * 100);
+    const icon = val >= 0.7 ? '🟢' : val >= 0.4 ? '🟡' : '🔴';
+    lines.push(`${icon} <b>${metricKeys[metric] || metric}</b> (bobot ${wPct}%)`);
+    lines.push(`   ${bar(val)} ${pct}/100`);
+  }
+  lines.push('');
+
+  // === Raw Stats ===
+  lines.push('<b>📈 Statistik Dasar</b>');
+  lines.push(`  Form: <b>${p.form}</b> | PPG: ${p.points_per_game} | Total Pts: ${p.total_points}`);
+  lines.push(`  Goals: ${p.goals_scored || 0} | Assists: ${p.assists || 0}`);
+  lines.push(`  xG: ${(parseFloat(p.expected_goals) || 0).toFixed(2)} | xA: ${(parseFloat(p.expected_assists) || 0).toFixed(2)} | xGI: ${(parseFloat(p.expected_goal_involvements) || 0).toFixed(2)}`);
+  lines.push(`  Menit: ${p.minutes} | Start: ${p.starts || 0} | CS: ${p.clean_sheets || 0}`);
+  lines.push(`  Bonus: ${p.bonus || 0} | BPS: ${p.bps || 0}`);
+  lines.push('');
+
+  // === Fixture Analysis ===
+  const fixtures = (p.nextFixtures || []).slice(0, 6);
+  if (fixtures.length > 0) {
+    lines.push('<b>📅 Fixture Analysis</b>');
+    const fdrEmojis = ['🟢', '🟡', '🟠', '🔴', '🔴'];
+    for (const f of fixtures) {
+      const fdrEmoji = fdrEmojis[f.fdr - 1] || '⚪';
+      lines.push(`  GW${f.gw}: ${f.isHome ? '🏠' : '✈️'} ${f.opponent_name || `Team${f.opponent}`} — FDR ${f.fdr} ${fdrEmoji}`);
+    }
+    const avgFdr = fixtures.reduce((sum, f) => sum + f.fdr, 0) / fixtures.length;
+    const fdrVerdict = avgFdr <= 2.5 ? '🟢 Sangat Mudah' : avgFdr <= 3 ? '🟡 Cukup Baik' : avgFdr <= 3.5 ? '🟠 Rata-rata' : '🔴 Sulit';
+    lines.push(`  <b>Rata-rata FDR: ${avgFdr.toFixed(1)}</b> — ${fdrVerdict}`);
+    lines.push('');
+  }
+
+  // === Transfer Activity ===
+  lines.push('<b>🔄 Transfer Activity</b>');
+  lines.push(`  Transfer In (GW): +${(p.transfers_in_event || 0).toLocaleString()}`);
+  lines.push(`  Transfer Out (GW): -${(p.transfers_out_event || 0).toLocaleString()}`);
+  const net = (p.transfers_in_event || 0) - (p.transfers_out_event || 0);
+  lines.push(`  Net: <b>${net >= 0 ? '+' : ''}${net.toLocaleString()}</b>`);
+  lines.push('');
+
+  // === Regression Analysis ===
+  const goalsScored = p.goals_scored || 0;
+  const xG = parseFloat(p.expected_goals) || 0;
+  const assists = p.assists || 0;
+  const xA = parseFloat(p.expected_assists) || 0;
+  const goalDiff = goalsScored - xG;
+  const assistDiff = assists - xA;
+
+  lines.push('<b>📉 Analisis Regresi</b>');
+  lines.push(`  Goals vs xG: ${goalsScored} vs ${xG.toFixed(1)} (${goalDiff >= 0 ? '+' : ''}${goalDiff.toFixed(1)})`);
+  lines.push(`  Assists vs xA: ${assists} vs ${xA.toFixed(1)} (${assistDiff >= 0 ? '+' : ''}${assistDiff.toFixed(1)})`);
+
+  if (s.regression === 'OVERPERFORMING') {
+    lines.push(`  ⚠️ <b>OVERPERFORMING</b> — waspada regresi turun`);
+  } else if (s.regression === 'UNDERPERFORMING') {
+    lines.push(`  💎 <b>UNDERPERFORMING</b> — potensi regresi naik, beli murah!`);
+  } else {
+    lines.push(`  ✅ Output sesuai dengan expected stats`);
+  }
+  lines.push('');
+
+  // === Minutes Security ===
+  lines.push('<b>⏱ Keamanan Menit</b>');
+  const chancePlay = p.chance_of_playing_next_round ?? 100;
+  const statusLabel = { a: '✅ Available', d: '⚠️ Doubtful', i: '🏥 Injured', s: '❌ Suspended', u: '❓ Unknown' };
+  lines.push(`  Status: ${statusLabel[p.status] || p.status}`);
+  lines.push(`  Chance of playing: ${chancePlay}%`);
+  lines.push(`  ${s.minutesSafe ? '✅ Aman' : '🚨 RISIKO ROTASI/CEDERA'}`);
+  if (p.minutes < 270) {
+    lines.push(`  ⚠️ Sample size kecil (${p.minutes} menit)`);
+  }
+  lines.push('');
+
+  // === Final Verdict ===
+  lines.push('<b>🏁 VERDICT</b>');
+  const verdicts = [];
+  if (s.qualityScore >= 70 && s.minutesSafe) {
+    verdicts.push('✅ <b>SANGAT DIREKOMENDASIKAN</b> — Skor tinggi & aman menit');
+  } else if (s.qualityScore >= 55 && s.minutesSafe) {
+    verdicts.push('👍 <b>LAYAK DIPILIH</b> — Performa solid');
+  } else if (s.qualityScore >= 40) {
+    verdicts.push('🤔 <b>PERTIMBANGKAN</b> — Ada pro & kontra');
+  } else {
+    verdicts.push('❌ <b>TIDAK DIREKOMENDASIKAN</b> — Skor terlalu rendah');
+  }
+
+  if (s.label === 'DIFFERENTIAL') verdicts.push('💎 Differential pick — ownership rendah');
+  if (s.regression === 'UNDERPERFORMING') verdicts.push('📈 Potensi regresi naik — value buy');
+  if (s.regression === 'OVERPERFORMING') verdicts.push('📉 Hati-hati regresi turun');
+  if (!s.minutesSafe) verdicts.push('🚨 Risiko menit bermain');
+
+  lines.push(verdicts.join('\n'));
+
+  return lines.join('\n');
+}
+
 module.exports = {
   playerCard, compareCard, rankingList, fixtureTable,
   priceChangeNotif, statusChangeNotif, squadCard, transferSuggestions,
   trendingCard, trendingOutCard, netTransferCard,
-  posLabel, priceStr,
+  analyzeCard, posLabel, priceStr,
 };

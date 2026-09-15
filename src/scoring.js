@@ -1,5 +1,5 @@
 const {
-  POSITION_WEIGHTS, DIFFERENTIAL, FIXTURE_WEIGHTS,
+  getPositionWeights, DIFFERENTIAL, FIXTURE_WEIGHTS,
   SHRINKAGE_MINUTES, MINUTES_SECURITY_GATE,
 } = require('./config');
 
@@ -108,7 +108,7 @@ function buildPositionStats(players) {
 // --- Skor komposit per pemain ---
 
 function scorePlayer(p, posStats) {
-  const w = POSITION_WEIGHTS[p.element_type];
+  const w = getPositionWeights()[p.element_type];
   if (!w) return { qualityScore: 0, differentialScore: 0, components: {}, label: 'UNKNOWN' };
 
   const pop = posStats[p.element_type];
