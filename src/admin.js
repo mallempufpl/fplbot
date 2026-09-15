@@ -167,16 +167,10 @@ function registerAdminCommands(bot) {
 
     console.log('🔄 Restart requested via /restart command');
 
-    // Stop polling dulu agar session di-release, baru exit
-    try {
-      bot.stop('RESTART');
-    } catch (e) {
-      console.error('Stop error:', e.message);
-    }
-
+    // Exit dengan code 1 agar Railway (restart policy: On Failure) restart otomatis
     setTimeout(() => {
-      process.exit(0); // Exit clean — process manager akan restart otomatis
-    }, 2000);
+      process.exit(1);
+    }, 1000);
   });
 
   // /myid — cek chat ID sendiri (berguna untuk setup awal)
