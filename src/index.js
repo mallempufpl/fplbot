@@ -17,6 +17,12 @@ if (!BOT_TOKEN) {
 
 const bot = new Telegraf(BOT_TOKEN);
 
+// Log setiap update yang masuk (debug)
+bot.use((ctx, next) => {
+  console.log(`📩 Update received: ${ctx.updateType} | ${ctx.message?.text || ''}`);
+  return next();
+});
+
 // Register all commands
 registerCommands(bot);
 registerAdminCommands(bot);
@@ -30,7 +36,7 @@ bot.on('text', ctx => {
 
 // Error handling
 bot.catch((err, ctx) => {
-  console.error(`Error for ${ctx.updateType}:`, err.message);
+  console.error(`❌ Bot error for ${ctx.updateType}:`, err.message);
 });
 
 // Health check HTTP server (keeps Render/Railway alive)
@@ -55,14 +61,25 @@ async function main() {
     // Start scheduled jobs
     startScheduler(bot, CHAT_ID);
 
-    // Reset webhook & polling session lama sebelum start
-    console.log('⏳ Resetting old session...');
-    await bot.telegram.deleteWebhook({ drop_pending_updates: false });
-    await new Promise(r => setTimeout(r, 2000));
+    // Hapus webhook lama jika ada, lalu start polling
+    console.log('⏳ Cleaning up old sessions...');
+    try {
+      await bot.telegram.deleteWebhook({ drop_pending_updates: false });
+    } catch (e) {
+      console.log('deleteWebhook error (ignored):', e.message);
+    }
+    await new Promise(r => setTimeout(r, 3000));
 
-    // Start bot (polling mode)
-    await bot.launch();
-    console.log('🤖 FPL Differential Bot is running! (v4)');
+    console.log('🚀 Starting bot polling...');
+    bot.launch({
+      polling: { timeout: 30, limit: 100 },
+    }).catch(err => {
+      console.error('❌ Polling error:', err.message);
+    });
+
+    // Tunggu sedikit untuk pastikan polling aktif
+    await new Promise(r => setTimeout(r, 1000));
+    console.log('🤖 FPL Differential Bot is running! (v5)');
     console.log(`📋 Admin CHAT_ID: ${CHAT_ID || '(not set)'}`);
 
     // Kirim notifikasi restart ke admin
