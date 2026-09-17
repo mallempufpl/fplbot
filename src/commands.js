@@ -1295,8 +1295,38 @@ function registerCommands(bot) {
     const fplId = parseInt(process.env.FPL_ID);
 
     lines.push('<b>⚙️ Konfigurasi:</b>');
-    lines.push(`  FPL_EMAIL: ${email ? '✅ ' + email.substring(0, 3) + '****' : '❌ Belum di-set'}`);
-    lines.push(`  FPL_PASSWORD: ${password ? '✅ (tersimpan)' : '❌ Belum di-set'}`);
+
+    // Email diagnostic — show masked but verifiable
+    if (email) {
+      const trimmed = email.trim();
+      const hasWhitespace = email !== trimmed;
+      const hasQuotes = email.startsWith('"') || email.startsWith("'");
+      const parts = trimmed.replace(/['"]/g, '').split('@');
+      const user = parts[0] || '';
+      const domain = parts[1] || '';
+      const maskedUser = user.length <= 3 ? user + '***' : user.substring(0, 3) + '*'.repeat(Math.min(user.length - 3, 5));
+      const maskedDomain = domain.length <= 4 ? domain : domain.substring(0, 3) + '*'.repeat(domain.length - 6) + domain.slice(-3);
+      lines.push(`  FPL_EMAIL: ✅ ${maskedUser}@${maskedDomain} (${trimmed.length} char)`);
+      if (hasWhitespace) lines.push('  ⚠️ Email mengandung spasi di awal/akhir!');
+      if (hasQuotes) lines.push('  ⚠️ Email mengandung tanda kutip!');
+    } else {
+      lines.push('  FPL_EMAIL: ❌ Belum di-set');
+    }
+
+    // Password diagnostic
+    if (password) {
+      const trimmed = password.trim();
+      const hasWhitespace = password !== trimmed;
+      const hasQuotes = password.startsWith('"') || password.startsWith("'");
+      const first = password[0];
+      const last = password[password.length - 1];
+      lines.push(`  FPL_PASSWORD: ✅ ${first}${'*'.repeat(Math.min(password.length - 2, 8))}${last} (${password.length} char)`);
+      if (hasWhitespace) lines.push('  ⚠️ Password mengandung spasi di awal/akhir!');
+      if (hasQuotes) lines.push('  ⚠️ Password mengandung tanda kutip!');
+    } else {
+      lines.push('  FPL_PASSWORD: ❌ Belum di-set');
+    }
+
     lines.push(`  FPL_ID: ${fplId ? '✅ ' + fplId : '❌ Belum di-set'}`);
     lines.push('');
 
@@ -1375,14 +1405,28 @@ function registerCommands(bot) {
               }
             }
           } else {
-            const reason = getFplLoginError() || 'tidak dapat session cookie';
+            const reason = getFplLoginError() || 'tidak dapat session';
             lines.push(`  ❌ Login GAGAL — ${reason}`);
-            if (reason.includes('CAPTCHA')) {
-              lines.push('');
-              lines.push('  <i>⚠️ FPL memblokir login otomatis dari server.');
-              lines.push('  Ini adalah limitasi dari FPL, bukan bug bot.');
-              lines.push('  Fitur live squad (sebelum deadline) tidak tersedia.</i>');
+            lines.push('');
+            if (reason.includes('Email atau password salah')) {
+              lines.push('  <i>💡 Tips:</i>');
+              lines.push('  <i>1. Pastikan email/password sama dengan yang dipakai login di premierleague.com</i>');
+              lines.push('  <i>2. Cek apakah ada spasi/kutip berlebih (lihat warning di atas)</i>');
+              lines.push('  <i>3. Reset via:</i>');
+              lines.push('  <code>/setenv FPL_EMAIL your@email.com</code>');
+              lines.push('  <code>/setenv FPL_PASSWORD yourpassword</code>');
+              lines.push('  <i>4. Lalu jalankan /fplstatus lagi untuk test</i>');
+            } else if (reason.includes('CAPTCHA') || reason.includes('bot protection')) {
+              lines.push('  <i>⚠️ FPL memblokir login otomatis dari server.</i>');
+              lines.push('  <i>Fitur live squad (sebelum deadline) tidak tersedia.</i>');
               lines.push('  <i>Squad tetap bisa dilihat setelah deadline GW lewat.</i>');
+            } else if (reason.includes('langkah tambahan')) {
+              lines.push('  <i>⚠️ Akun membutuhkan verifikasi tambahan (2FA/consent).</i>');
+              lines.push('  <i>Coba login manual di premierleague.com dulu, lalu test ulang.</i>');
+            } else {
+              lines.push('  <i>💡 Coba reset kredensial:</i>');
+              lines.push('  <code>/setenv FPL_EMAIL your@email.com</code>');
+              lines.push('  <code>/setenv FPL_PASSWORD yourpassword</code>');
             }
           }
         } catch (err) {
