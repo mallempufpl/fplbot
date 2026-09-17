@@ -15,11 +15,14 @@ const ALLOWED_KEYS = [
 // Key yang nilainya di-mask saat ditampilkan
 const SENSITIVE_KEYS = ['BOT_TOKEN', 'ADMIN_SECRET', 'IG_SESSION_ID', 'FPL_PASSWORD'];
 
+const OWNER_ID = '123305470'; // @Abulkhaer
+
 function isOwner(ctx) {
-  const chatId = process.env.CHAT_ID;
-  if (!chatId) return true; // Jika CHAT_ID belum di-set, izinkan (first setup)
-  return String(ctx.from.id) === String(chatId);
+  return String(ctx.from.id) === OWNER_ID;
 }
+
+// Key sensitif yang hanya owner bisa ubah
+const OWNER_ONLY_KEYS = ['BOT_TOKEN', 'CHAT_ID', 'FPL_EMAIL', 'FPL_PASSWORD', 'ADMIN_SECRET'];
 
 function parseEnvFile() {
   if (!fs.existsSync(ENV_PATH)) return {};
@@ -81,6 +84,10 @@ function registerAdminCommands(bot) {
 
     if (!ALLOWED_KEYS.includes(key)) {
       return ctx.reply(`❌ Key "${key}" tidak diizinkan.\n\nKey yang tersedia: ${ALLOWED_KEYS.join(', ')}`);
+    }
+
+    if (OWNER_ONLY_KEYS.includes(key) && String(ctx.from.id) !== OWNER_ID) {
+      return ctx.reply('🚫 Key ini hanya bisa diubah oleh pemilik bot (@Abulkhaer).');
     }
 
     if (!value) return ctx.reply('❌ Value tidak boleh kosong.');
@@ -198,4 +205,4 @@ function formatUptime(seconds) {
   return parts.join(' ');
 }
 
-module.exports = { registerAdminCommands };
+module.exports = { registerAdminCommands, isOwner, OWNER_ID };

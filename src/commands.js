@@ -1,10 +1,14 @@
 const { fetchAll, fetchManagerInfo, fetchManagerPicks, fetchMyTeam } = require('./fpl-api');
 const { scoreAllPlayers } = require('./scoring');
-const { addToWatchlist, removeFromWatchlist, getWatchlist, registerUser, getUser, getAllUsers } = require('./database');
+const {
+  addToWatchlist, removeFromWatchlist, getWatchlist,
+  registerUser, getUser, getAllUsers, updateUserActivity, getUserActivity, getUserStats,
+} = require('./database');
 const {
   POSITION_NAMES, POSITION_EMOJI, ALL_METRICS, METRIC_LABELS,
   getActiveMetrics, getPositionWeights, DEFAULT_WEIGHTS,
 } = require('./config');
+const { isOwner, OWNER_ID } = require('./admin');
 const fmt = require('./format');
 const {
   ensureHistoricalData, refreshHistoricalData, makePlayerKey,
@@ -67,17 +71,10 @@ function posIdFromStr(str) {
 // Perintah yang bisa diakses tanpa registrasi
 const PUBLIC_COMMANDS = ['start', 'myid'];
 
-function isOwner(ctx) {
-  const chatId = process.env.CHAT_ID;
-  if (!chatId) return true;
-  return String(ctx.from.id) === String(chatId);
-}
-
 // Ambil FPL ID user: dari registered user atau fallback ke env (owner)
 function getUserFplId(ctx) {
   const user = getUser(ctx.from.id);
   if (user?.fpl_id) return user.fpl_id;
-  // Fallback untuk owner
   if (isOwner(ctx) && process.env.FPL_ID) return parseInt(process.env.FPL_ID);
   return null;
 }
@@ -85,20 +82,25 @@ function getUserFplId(ctx) {
 function registerCommands(bot) {
 
   // =====================
-  // MIDDLEWARE: Cek registrasi sebelum akses fitur
+  // MIDDLEWARE: Cek registrasi + tracking aktivitas
   // =====================
   bot.use((ctx, next) => {
-    // Hanya proses pesan text / command
     if (!ctx.message?.text) return next();
 
     const text = ctx.message.text;
     const command = text.startsWith('/') ? text.split(/[\s@]/)[0].substring(1).toLowerCase() : null;
 
-    // Public commands & admin commands selalu diizinkan
+    // Public commands selalu diizinkan
     if (!command || PUBLIC_COMMANDS.includes(command)) return next();
 
     // Owner selalu bisa akses
-    if (isOwner(ctx)) return next();
+    if (isOwner(ctx)) {
+      // Track aktivitas owner juga
+      if (command) {
+        try { updateUserActivity(ctx.from.id, command, text.replace(/^\/\S+\s*/, '').trim() || null); } catch {}
+      }
+      return next();
+    }
 
     // Cek registrasi
     const user = getUser(ctx.from.id);
@@ -108,6 +110,11 @@ function registerCommands(bot) {
         `Sebelum menggunakan bot ini, kamu perlu mendaftarkan FPL ID kamu dulu.\n\n` +
         `Ketik /start untuk mulai registrasi.`
       );
+    }
+
+    // Track aktivitas user terdaftar
+    if (command) {
+      try { updateUserActivity(ctx.from.id, command, text.replace(/^\/\S+\s*/, '').trim() || null); } catch {}
     }
 
     return next();
@@ -157,7 +164,7 @@ function registerCommands(bot) {
       // Validasi FPL ID
       try {
         const manager = await fetchManagerInfo(fplId);
-        registerUser(ctx.from.id, fplId, ctx.from.username, ctx.from.first_name);
+        registerUser(ctx.from.id, fplId, ctx);
 
         return ctx.replyWithHTML([
           `✅ <b>Registrasi Berhasil!</b>`,
@@ -216,10 +223,12 @@ function registerCommands(bot) {
       '/refresh — Refresh data',
       ...(isOwner(ctx) ? [
         '',
-        '<b>🔒 Admin:</b>',
+        '<b>🔒 Admin (@Abulkhaer):</b>',
+        '/users — Dashboard & monitor user',
+        '/users &lt;chat_id&gt; — Detail user',
+        '/removeuser &lt;chat_id&gt; — Hapus user',
         '/setenv · /getenv · /delenv · /restart',
         '/refreshhistory — Refresh data historis',
-        '/users — Daftar user terdaftar',
       ] : []),
     ].join('\n'));
   });
@@ -1047,22 +1056,111 @@ function registerCommands(bot) {
     }
   });
 
-  // /users — Daftar user terdaftar (admin only)
+  // /users — Dashboard user lengkap (owner only)
   bot.command('users', ctx => {
-    if (!isOwner(ctx)) return ctx.reply('🚫 Hanya admin.');
+    if (!isOwner(ctx)) return ctx.reply('🚫 Hanya pemilik bot (@Abulkhaer).');
 
+    const args = ctx.message.text.replace(/^\/users\s*/i, '').trim();
+
+    // /users <chat_id> — Detail user tertentu
+    if (args) {
+      const targetId = args;
+      const user = getUser(targetId);
+      if (!user) return ctx.reply(`❌ User dengan ID ${targetId} tidak ditemukan.`);
+
+      const activity = getUserActivity(targetId, 20);
+      const lines = [
+        `<b>👤 Detail User</b>\n`,
+        `🆔 Chat ID: <code>${user.chat_id}</code>`,
+        `📋 Nama: <b>${user.first_name || '-'}${user.last_name ? ' ' + user.last_name : ''}</b>`,
+        `🏷 Username: ${user.username ? '@' + user.username : '(tidak ada)'}`,
+        `🌐 Bahasa: ${user.language_code || '-'}`,
+        `⚽ FPL ID: <code>${user.fpl_id}</code>`,
+        `📅 Terdaftar: ${user.registered_at}`,
+        `🕐 Terakhir aktif: ${user.last_seen}`,
+        `📊 Total perintah: ${user.command_count}`,
+        `🔄 Perintah terakhir: /${user.last_command || '-'}`,
+        ``,
+      ];
+
+      if (activity.length > 0) {
+        lines.push('<b>📜 Aktivitas Terakhir:</b>');
+        activity.forEach(a => {
+          const time = a.timestamp.split(' ')[1] || a.timestamp;
+          const date = a.timestamp.split(' ')[0] || '';
+          lines.push(`  ${date} ${time} — /${a.command}${a.args ? ' ' + a.args.substring(0, 30) : ''}`);
+        });
+      }
+
+      lines.push('\n<b>Aksi:</b>');
+      lines.push(`<code>/removeuser ${user.chat_id}</code> — Hapus user ini`);
+
+      return ctx.replyWithHTML(lines.join('\n'));
+    }
+
+    // /users — Dashboard overview
     const users = getAllUsers();
-    if (users.length === 0) return ctx.reply('📋 Belum ada user terdaftar.');
+    const stats = getUserStats();
 
-    const lines = [`<b>👥 User Terdaftar (${users.length})</b>\n`];
-    users.forEach((u, i) => {
-      lines.push(
-        `${i + 1}. <b>${u.first_name || 'Unknown'}</b>` +
-        `${u.username ? ' (@' + u.username + ')' : ''}` +
-        ` — FPL ID: <code>${u.fpl_id}</code>`
-      );
-    });
+    const lines = [
+      `<b>👥 DASHBOARD USER</b>`,
+      ``,
+      `<b>📊 Statistik:</b>`,
+      `  Total user: <b>${stats.totalUsers}</b>`,
+      `  Aktif hari ini: <b>${stats.activeToday}</b>`,
+      `  Aktif 7 hari: <b>${stats.activeWeek}</b>`,
+      `  Total perintah: <b>${stats.totalCommands}</b>`,
+      ``,
+    ];
+
+    if (stats.topCommands.length > 0) {
+      lines.push('<b>🔥 Perintah Terpopuler:</b>');
+      stats.topCommands.forEach(c => {
+        lines.push(`  /${c.command} — ${c.cnt}x`);
+      });
+      lines.push('');
+    }
+
+    if (users.length > 0) {
+      lines.push('<b>👤 Daftar User:</b>');
+      lines.push('');
+      users.forEach((u, i) => {
+        const isActive = u.last_seen && new Date(u.last_seen + 'Z') > new Date(Date.now() - 86400000);
+        const dot = isActive ? '🟢' : '⚪';
+        lines.push(
+          `${dot} ${i + 1}. <b>${u.first_name || 'Unknown'}${u.last_name ? ' ' + u.last_name : ''}</b>` +
+          `${u.username ? ' (@' + u.username + ')' : ''}`
+        );
+        lines.push(
+          `      FPL: <code>${u.fpl_id}</code> · Cmd: ${u.command_count} · Last: ${u.last_seen?.split(' ')[0] || '-'}`
+        );
+      });
+      lines.push('');
+      lines.push('<i>💡 Ketik /users [chat_id] untuk detail user</i>');
+    } else {
+      lines.push('<i>Belum ada user terdaftar.</i>');
+    }
+
     ctx.replyWithHTML(lines.join('\n'));
+  });
+
+  // /removeuser <chat_id> — Hapus user (owner only)
+  bot.command('removeuser', ctx => {
+    if (!isOwner(ctx)) return ctx.reply('🚫 Hanya pemilik bot.');
+
+    const targetId = ctx.message.text.replace(/^\/removeuser\s*/i, '').trim();
+    if (!targetId) return ctx.reply('Gunakan: /removeuser <chat_id>');
+
+    if (targetId === OWNER_ID) return ctx.reply('❌ Tidak bisa menghapus pemilik bot.');
+
+    const user = getUser(targetId);
+    if (!user) return ctx.reply(`❌ User ${targetId} tidak ditemukan.`);
+
+    deleteUser(targetId);
+    ctx.replyWithHTML(
+      `✅ User <b>${user.first_name || 'Unknown'}</b> (${user.chat_id}) berhasil dihapus.\n` +
+      `Data aktivitas juga dihapus.`
+    );
   });
 
   // /refreshhistory — Force refresh data historis

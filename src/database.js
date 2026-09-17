@@ -43,9 +43,35 @@ function getDb() {
       fpl_id INTEGER,
       username TEXT,
       first_name TEXT,
-      registered_at TEXT DEFAULT (datetime('now'))
+      last_name TEXT,
+      language_code TEXT,
+      registered_at TEXT DEFAULT (datetime('now')),
+      last_seen TEXT DEFAULT (datetime('now')),
+      command_count INTEGER DEFAULT 0,
+      last_command TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS user_activity (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chat_id TEXT,
+      command TEXT,
+      args TEXT,
+      timestamp TEXT DEFAULT (datetime('now'))
     );
   `);
+
+  // Migrasi: tambah kolom baru jika belum ada (untuk DB yang sudah ada)
+  const userCols = db.pragma('table_info(users)').map(c => c.name);
+  const addCol = (col, type) => {
+    if (!userCols.includes(col)) {
+      db.exec(`ALTER TABLE users ADD COLUMN ${col} ${type}`);
+    }
+  };
+  addCol('last_name', 'TEXT');
+  addCol('language_code', 'TEXT');
+  addCol('last_seen', "TEXT DEFAULT (datetime('now'))");
+  addCol('command_count', 'INTEGER DEFAULT 0');
+  addCol('last_command', 'TEXT');
 
   return db;
 }
@@ -103,22 +129,76 @@ function isWatched(playerId) {
 }
 
 // Users
-function registerUser(chatId, fplId, username, firstName) {
-  getDb().prepare(
-    'INSERT OR REPLACE INTO users (chat_id, fpl_id, username, first_name) VALUES (?, ?, ?, ?)'
-  ).run(String(chatId), fplId, username || null, firstName || null);
+function registerUser(chatId, fplId, ctx) {
+  const from = ctx?.from || {};
+  getDb().prepare(`
+    INSERT INTO users (chat_id, fpl_id, username, first_name, last_name, language_code)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(chat_id) DO UPDATE SET
+      fpl_id = excluded.fpl_id,
+      username = excluded.username,
+      first_name = excluded.first_name,
+      last_name = excluded.last_name,
+      language_code = excluded.language_code,
+      last_seen = datetime('now')
+  `).run(
+    String(chatId), fplId,
+    from.username || null,
+    from.first_name || null,
+    from.last_name || null,
+    from.language_code || null
+  );
 }
 
 function getUser(chatId) {
   return getDb().prepare('SELECT * FROM users WHERE chat_id = ?').get(String(chatId));
 }
 
+function updateUserActivity(chatId, command, args) {
+  const db = getDb();
+  db.prepare(`
+    UPDATE users SET last_seen = datetime('now'), command_count = command_count + 1, last_command = ?
+    WHERE chat_id = ?
+  `).run(command, String(chatId));
+
+  db.prepare(`
+    INSERT INTO user_activity (chat_id, command, args) VALUES (?, ?, ?)
+  `).run(String(chatId), command, args || null);
+}
+
+function getUserActivity(chatId, limit = 20) {
+  return getDb().prepare(
+    'SELECT * FROM user_activity WHERE chat_id = ? ORDER BY timestamp DESC LIMIT ?'
+  ).all(String(chatId), limit);
+}
+
+function getUserStats() {
+  const db = getDb();
+  const totalUsers = db.prepare('SELECT COUNT(*) as cnt FROM users').get().cnt;
+  const activeToday = db.prepare(
+    "SELECT COUNT(*) as cnt FROM users WHERE last_seen >= datetime('now', '-1 day')"
+  ).get().cnt;
+  const activeWeek = db.prepare(
+    "SELECT COUNT(*) as cnt FROM users WHERE last_seen >= datetime('now', '-7 days')"
+  ).get().cnt;
+  const totalCommands = db.prepare(
+    'SELECT COALESCE(SUM(command_count), 0) as cnt FROM users'
+  ).get().cnt;
+  const topCommands = db.prepare(`
+    SELECT command, COUNT(*) as cnt FROM user_activity
+    GROUP BY command ORDER BY cnt DESC LIMIT 10
+  `).all();
+  return { totalUsers, activeToday, activeWeek, totalCommands, topCommands };
+}
+
 function deleteUser(chatId) {
-  getDb().prepare('DELETE FROM users WHERE chat_id = ?').run(String(chatId));
+  const db = getDb();
+  db.prepare('DELETE FROM user_activity WHERE chat_id = ?').run(String(chatId));
+  db.prepare('DELETE FROM users WHERE chat_id = ?').run(String(chatId));
 }
 
 function getAllUsers() {
-  return getDb().prepare('SELECT * FROM users ORDER BY registered_at').all();
+  return getDb().prepare('SELECT * FROM users ORDER BY last_seen DESC').all();
 }
 
 module.exports = {
@@ -132,6 +212,9 @@ module.exports = {
   isWatched,
   registerUser,
   getUser,
+  updateUserActivity,
+  getUserActivity,
+  getUserStats,
   deleteUser,
   getAllUsers,
 };
