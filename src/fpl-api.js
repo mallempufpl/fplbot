@@ -130,72 +130,33 @@ async function fplLogin() {
       return null;
     }
 
-    // Step 3: Pass bot protection screen (submit empty protectsdk)
-    const botResp = await axios.post(
+    // Step 3: Submit bot protection + login credentials in ONE request
+    // DaVinci customHTMLTemplate may combine protectsdk + login fields on same screen
+    console.log('DaVinci step3: submitting combined protectsdk + credentials');
+    const loginResp = await axios.post(
       `${base}/davinci/connections/${flowResp.data.connectionId}/capabilities/${flowResp.data.capabilityName}`,
       {
         id: flowResp.data.id,
         eventName: 'continue',
-        parameters: { eventType: 'submit', data: { actionKey: 'continue', formData: { protectsdk: '' } } },
-      },
-      { headers: { ...hdr, interactionid: interactionId }, validateStatus: () => true, timeout: 15000 }
-    );
-
-    // Log bot protection response to discover expected form fields
-    console.log('DaVinci step3 (bot protection) response keys:', JSON.stringify({
-      status: botResp.status,
-      connectionId: botResp.data.connectionId,
-      capabilityName: botResp.data.capabilityName,
-      formFields: botResp.data.form?.fields,
-      screen: botResp.data.screen,
-      formKeys: botResp.data.form ? Object.keys(botResp.data.form) : null,
-      topKeys: Object.keys(botResp.data || {}),
-    }).substring(0, 1000));
-
-    // Detect form field names from DaVinci response
-    const formFields = botResp.data.form?.fields || [];
-    const fieldNames = formFields.map(f => f.key || f.name || f.propertyName).filter(Boolean);
-    console.log('DaVinci expected login field names:', fieldNames);
-    fplLoginDebug.steps.push({
-      step: 3, name: 'bot-protection', status: botResp.status,
-      hasConnectionId: !!botResp.data.connectionId,
-      screenName: botResp.data.screen?.name || null,
-      detectedFields: fieldNames,
-      topKeys: Object.keys(botResp.data || {}),
-    });
-
-    // Build login parameters using detected field names or fallback to common PingOne names
-    const loginParams = {};
-    const emailFieldName = fieldNames.find(f => /email|username|identifier|signonidentifier/i.test(f)) || 'username';
-    const passFieldName = fieldNames.find(f => /password|signonpassword/i.test(f)) || 'password';
-    loginParams[emailFieldName] = email;
-    loginParams[passFieldName] = password;
-    // Add button/submit value
-    const btnFieldName = fieldNames.find(f => /button|submit|action/i.test(f)) || 'buttonValue';
-    loginParams[btnFieldName] = 'SIGNON';
-
-    console.log(`DaVinci login fields: email="${emailFieldName}", pass="${passFieldName}", btn="${btnFieldName}"`);
-
-    // Step 4: Submit login credentials
-    const loginResp = await axios.post(
-      `${base}/davinci/connections/${botResp.data.connectionId}/capabilities/${botResp.data.capabilityName}`,
-      {
-        id: botResp.data.id,
-        eventName: 'continue',
-        parameters: loginParams,
+        parameters: {
+          protectsdk: '',
+          username: email,
+          password: password,
+          buttonValue: 'SIGNON',
+        },
       },
       { headers: { ...hdr, interactionid: interactionId }, validateStatus: () => true, timeout: 15000 }
     );
 
     console.log(`FPL PingOne login: status=${loginResp.status}, respKeys=${Object.keys(loginResp.data || {}).join(',')}`);
     fplLoginDebug.steps.push({
-      step: 4, name: 'login-submit', status: loginResp.status,
-      usedFields: { email: emailFieldName, pass: passFieldName, btn: btnFieldName },
+      step: 3, name: 'combined-submit', status: loginResp.status,
+      approach: 'combined (protectsdk + credentials in one)',
       hasAuthCode: !!loginResp.data.authorizeResponse?.code,
       errorCode: loginResp.data.code || null,
       errorReason: loginResp.data.error_reason || null,
       screenName: loginResp.data.screen?.name || null,
-      respSnippet: JSON.stringify(loginResp.data).substring(0, 300),
+      respSnippet: JSON.stringify(loginResp.data).substring(0, 400),
     });
 
     // Check for auth code in response
