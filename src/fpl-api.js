@@ -262,6 +262,111 @@ function setFplSession(token) {
   fplLoginError = null;
 }
 
+// =====================
+// Device Code Flow — user authorizes in browser, bot gets token
+// =====================
+
+let fplRefreshToken = null;
+
+async function startDeviceCodeFlow() {
+  try {
+    const { data } = await axios.post(
+      `${PINGONE_AUTH_ROOT}/${PINGONE_ENV_ID}/as/device_authorization`,
+      new URLSearchParams({
+        client_id: PINGONE_CLIENT_ID,
+        scope: 'openid',
+      }).toString(),
+      {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        timeout: 15000,
+      }
+    );
+    return data; // { device_code, user_code, verification_uri, verification_uri_complete, expires_in, interval }
+  } catch (err) {
+    console.error('Device code flow start failed:', err.response?.data || err.message);
+    return null;
+  }
+}
+
+async function pollDeviceCodeToken(deviceCode, interval = 5, expiresIn = 600) {
+  const deadline = Date.now() + expiresIn * 1000;
+
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, interval * 1000));
+
+    try {
+      const { data } = await axios.post(
+        `${PINGONE_AUTH_ROOT}/${PINGONE_ENV_ID}/as/token`,
+        new URLSearchParams({
+          grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+          device_code: deviceCode,
+          client_id: PINGONE_CLIENT_ID,
+        }).toString(),
+        {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          validateStatus: () => true,
+          timeout: 15000,
+        }
+      );
+
+      if (data.access_token) {
+        fplSession = `Bearer ${data.access_token}`;
+        fplRefreshToken = data.refresh_token || null;
+        fplLoginError = null;
+        console.log('✅ FPL device code login berhasil');
+        return { success: true, access_token: data.access_token };
+      }
+
+      if (data.error === 'authorization_pending') {
+        continue; // user hasn't authorized yet
+      }
+      if (data.error === 'slow_down') {
+        interval += 5; // back off
+        continue;
+      }
+
+      // Other errors (expired_token, access_denied)
+      return { success: false, error: data.error_description || data.error || 'Unknown error' };
+    } catch (err) {
+      // Network error — retry
+      console.warn('Device code poll error:', err.message);
+    }
+  }
+
+  return { success: false, error: 'Timeout — kamu tidak menyelesaikan login dalam waktu yang ditentukan' };
+}
+
+async function refreshFplToken() {
+  if (!fplRefreshToken) return false;
+  try {
+    const { data } = await axios.post(
+      `${PINGONE_AUTH_ROOT}/${PINGONE_ENV_ID}/as/token`,
+      new URLSearchParams({
+        grant_type: 'refresh_token',
+        refresh_token: fplRefreshToken,
+        client_id: PINGONE_CLIENT_ID,
+      }).toString(),
+      {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        validateStatus: () => true,
+        timeout: 15000,
+      }
+    );
+    if (data.access_token) {
+      fplSession = `Bearer ${data.access_token}`;
+      if (data.refresh_token) fplRefreshToken = data.refresh_token;
+      console.log('✅ FPL token refreshed');
+      return true;
+    }
+    console.error('FPL token refresh failed:', data.error);
+    fplRefreshToken = null;
+    return false;
+  } catch (err) {
+    console.error('FPL token refresh error:', err.message);
+    return false;
+  }
+}
+
 function buildAuthHeaders() {
   if (!fplSession) return null;
   // Support both Bearer token (PingOne) and Cookie (legacy)
@@ -286,10 +391,13 @@ async function fetchMyTeam(managerId) {
     });
     return data;
   } catch (err) {
-    // Session expired — coba login ulang sekali
+    // Session expired — coba refresh token dulu, lalu login ulang
     if (err.response?.status === 401 || err.response?.status === 403) {
-      fplSession = null;
-      await fplLogin();
+      const refreshed = await refreshFplToken();
+      if (!refreshed) {
+        fplSession = null;
+        await fplLogin();
+      }
       if (!fplSession) return null;
       try {
         const { data } = await axios.get(`${BASE}/my-team/${managerId}/`, {
@@ -362,4 +470,5 @@ module.exports = {
   fetchAll, fetchBootstrap, fetchFixtures, fetchPlayerHistory,
   fetchManagerInfo, fetchManagerPicks, fetchManagerTransfers, clearCache,
   fetchMyTeam, fplLogin, getFplLoginError, getFplLoginDebug, setFplSession,
+  startDeviceCodeFlow, pollDeviceCodeToken, refreshFplToken,
 };
