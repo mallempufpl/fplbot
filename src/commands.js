@@ -535,29 +535,26 @@ function registerCommands(bot) {
         }
       }
 
-      // 2. Coba ambil picks GW berikutnya (tersedia setelah deadline)
-      if (!picks && nextGw > currentGw) {
+      // 2. Coba ambil picks: nextGw → currentGw → GW sebelumnya
+      const gwsToTry = [];
+      if (nextGw > currentGw) gwsToTry.push(nextGw);
+      gwsToTry.push(currentGw);
+      for (let gw = currentGw - 1; gw >= Math.max(1, currentGw - 3); gw--) {
+        gwsToTry.push(gw);
+      }
+
+      for (const gw of gwsToTry) {
+        if (picks) break;
         try {
-          picks = await fetchManagerPicks(managerId, nextGw);
-          displayGw = nextGw;
+          picks = await fetchManagerPicks(managerId, gw);
+          displayGw = gw;
         } catch {
-          // GW berikutnya belum tersedia
+          // GW ini tidak tersedia, coba yang berikutnya
         }
       }
 
-      // 3. Fallback ke GW terakhir yang tersedia
       if (!picks) {
-        try {
-          picks = await fetchManagerPicks(managerId, currentGw);
-          displayGw = currentGw;
-        } catch {
-          if (currentGw > 1) {
-            picks = await fetchManagerPicks(managerId, currentGw - 1);
-            displayGw = currentGw - 1;
-          } else {
-            return ctx.reply('❌ Belum ada data squad untuk musim ini.');
-          }
-        }
+        return ctx.reply('❌ Belum ada data squad. Pastikan kamu sudah set squad di aplikasi FPL.');
       }
 
       // 4. Terapkan transfer pending (jika bukan live data)
@@ -625,20 +622,18 @@ function registerCommands(bot) {
       const nextGw = bootstrap.events.find(e => e.is_next)?.id || currentGw;
 
       let picks;
-      // Coba next GW dulu, fallback ke current, lalu current-1
-      if (nextGw > currentGw) {
-        try { picks = await fetchManagerPicks(managerId, nextGw); } catch {}
+      const gwsToTry = [];
+      if (nextGw > currentGw) gwsToTry.push(nextGw);
+      gwsToTry.push(currentGw);
+      for (let gw = currentGw - 1; gw >= Math.max(1, currentGw - 3); gw--) {
+        gwsToTry.push(gw);
+      }
+      for (const gw of gwsToTry) {
+        if (picks) break;
+        try { picks = await fetchManagerPicks(managerId, gw); } catch {}
       }
       if (!picks) {
-        try {
-          picks = await fetchManagerPicks(managerId, currentGw);
-        } catch {
-          if (currentGw > 1) {
-            picks = await fetchManagerPicks(managerId, currentGw - 1);
-          } else {
-            return ctx.reply('❌ Belum ada data squad.');
-          }
-        }
+        return ctx.reply('❌ Belum ada data squad. Pastikan kamu sudah set squad di aplikasi FPL.');
       }
 
       // Terapkan transfer pending
