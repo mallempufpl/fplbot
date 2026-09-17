@@ -225,8 +225,9 @@ function registerCommands(bot) {
         '',
         '<b>🔒 Admin (@Abulkhaer):</b>',
         '/users — Dashboard & monitor user',
-        '/users &lt;chat_id&gt; — Detail user',
         '/removeuser &lt;chat_id&gt; — Hapus user',
+        '/xadd · /xdel — Kelola akun X',
+        '/igadd · /igdel — Kelola akun IG',
         '/setenv · /getenv · /delenv · /restart',
         '/refreshhistory — Refresh data historis',
       ] : []),
@@ -871,29 +872,124 @@ function registerCommands(bot) {
   });
 
   // /newslist — Lihat daftar akun sumber berita
+  // /newslist — Lihat daftar akun sumber berita (semua user)
   bot.command('newslist', ctx => {
+    const xAccounts = getAccountsX();
+    const igAccounts = getAccountsIG();
+
     const lines = ['<b>📰 Daftar Akun Sumber Berita</b>\n'];
 
     lines.push('<b>🐦 X/Twitter:</b>');
-    if (getAccountsX().length === 0) {
+    if (xAccounts.length === 0) {
       lines.push('  <i>Belum ada akun</i>');
     } else {
-      getAccountsX().forEach(a => lines.push(`  • ${a.username}`));
+      xAccounts.forEach((a, i) => lines.push(`  ${i + 1}. ${a.username}`));
     }
 
     lines.push('\n<b>📸 Instagram:</b>');
-    if (getAccountsIG().length === 0) {
+    if (igAccounts.length === 0) {
       lines.push('  <i>Belum ada akun</i>');
     } else {
-      getAccountsIG().forEach(a => lines.push(`  • ${a.username}`));
+      igAccounts.forEach((a, i) => lines.push(`  ${i + 1}. ${a.username}`));
     }
 
-    lines.push('\n<b>Cara edit akun:</b>');
-    lines.push('<code>/setenv X_ACCOUNTS OfficialFPL,FPLStatus,BenCrellin</code>');
-    lines.push('<code>/setenv IG_ACCOUNTS officialfpl,premierleague</code>');
-    lines.push('\n<i>Username tanpa @, pisahkan dengan koma</i>');
+    if (isOwner(ctx)) {
+      lines.push('\n<b>⚙️ Kelola Akun (Owner):</b>');
+      lines.push('/xadd &lt;username&gt; — Tambah akun X');
+      lines.push('/xdel &lt;username&gt; — Hapus akun X');
+      lines.push('/igadd &lt;username&gt; — Tambah akun IG');
+      lines.push('/igdel &lt;username&gt; — Hapus akun IG');
+    }
 
     ctx.replyWithHTML(lines.join('\n'));
+  });
+
+  // --- Helper: update akun di env & .env file ---
+  function updateAccountEnv(key, accounts) {
+    const value = accounts.join(',');
+    process.env[key] = value;
+    // Persist ke .env file
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const envPath = path.join(__dirname, '..', '.env');
+      if (fs.existsSync(envPath)) {
+        let content = fs.readFileSync(envPath, 'utf-8');
+        const regex = new RegExp(`^${key}=.*$`, 'm');
+        if (regex.test(content)) {
+          content = content.replace(regex, `${key}=${value}`);
+        } else {
+          content = content.trimEnd() + `\n${key}=${value}\n`;
+        }
+        fs.writeFileSync(envPath, content, 'utf-8');
+      }
+    } catch (err) {
+      console.error('Error saving .env:', err.message);
+    }
+  }
+
+  function getCurrentUsernames(envKey, getterFn) {
+    return getterFn().map(a => a.username);
+  }
+
+  // /xadd <username> — Tambah akun X (owner only)
+  bot.command('xadd', ctx => {
+    if (!isOwner(ctx)) return ctx.reply('🚫 Hanya pemilik bot.');
+    const username = ctx.message.text.replace(/^\/xadd\s*/i, '').trim().replace(/^@/, '');
+    if (!username) return ctx.reply('Gunakan: /xadd <username>');
+
+    const current = getCurrentUsernames('X_ACCOUNTS', getAccountsX);
+    if (current.map(u => u.toLowerCase()).includes(username.toLowerCase())) {
+      return ctx.reply(`⚠️ ${username} sudah ada di daftar X.`);
+    }
+    current.push(username);
+    updateAccountEnv('X_ACCOUNTS', current);
+    ctx.replyWithHTML(`✅ <b>${username}</b> ditambahkan ke sumber X.\n\nTotal: ${current.length} akun`);
+  });
+
+  // /xdel <username> — Hapus akun X (owner only)
+  bot.command('xdel', ctx => {
+    if (!isOwner(ctx)) return ctx.reply('🚫 Hanya pemilik bot.');
+    const username = ctx.message.text.replace(/^\/xdel\s*/i, '').trim().replace(/^@/, '');
+    if (!username) return ctx.reply('Gunakan: /xdel <username>');
+
+    const current = getCurrentUsernames('X_ACCOUNTS', getAccountsX);
+    const idx = current.findIndex(u => u.toLowerCase() === username.toLowerCase());
+    if (idx === -1) return ctx.reply(`❌ ${username} tidak ada di daftar X.`);
+
+    const removed = current.splice(idx, 1)[0];
+    updateAccountEnv('X_ACCOUNTS', current);
+    ctx.replyWithHTML(`✅ <b>${removed}</b> dihapus dari sumber X.\n\nSisa: ${current.length} akun`);
+  });
+
+  // /igadd <username> — Tambah akun IG (owner only)
+  bot.command('igadd', ctx => {
+    if (!isOwner(ctx)) return ctx.reply('🚫 Hanya pemilik bot.');
+    const username = ctx.message.text.replace(/^\/igadd\s*/i, '').trim().replace(/^@/, '');
+    if (!username) return ctx.reply('Gunakan: /igadd <username>');
+
+    const current = getCurrentUsernames('IG_ACCOUNTS', getAccountsIG);
+    if (current.map(u => u.toLowerCase()).includes(username.toLowerCase())) {
+      return ctx.reply(`⚠️ ${username} sudah ada di daftar IG.`);
+    }
+    current.push(username);
+    updateAccountEnv('IG_ACCOUNTS', current);
+    ctx.replyWithHTML(`✅ <b>${username}</b> ditambahkan ke sumber IG.\n\nTotal: ${current.length} akun`);
+  });
+
+  // /igdel <username> — Hapus akun IG (owner only)
+  bot.command('igdel', ctx => {
+    if (!isOwner(ctx)) return ctx.reply('🚫 Hanya pemilik bot.');
+    const username = ctx.message.text.replace(/^\/igdel\s*/i, '').trim().replace(/^@/, '');
+    if (!username) return ctx.reply('Gunakan: /igdel <username>');
+
+    const current = getCurrentUsernames('IG_ACCOUNTS', getAccountsIG);
+    const idx = current.findIndex(u => u.toLowerCase() === username.toLowerCase());
+    if (idx === -1) return ctx.reply(`❌ ${username} tidak ada di daftar IG.`);
+
+    const removed = current.splice(idx, 1)[0];
+    updateAccountEnv('IG_ACCOUNTS', current);
+    ctx.replyWithHTML(`✅ <b>${removed}</b> dihapus dari sumber IG.\n\nSisa: ${current.length} akun`);
   });
 
   // /metrics — lihat dan kelola metrik scoring
