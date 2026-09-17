@@ -1,4 +1,5 @@
 const axios = require('axios');
+const crypto = require('crypto');
 
 const BASE = 'https://fantasy.premierleague.com/api';
 
@@ -56,6 +57,7 @@ function clearCache() {
 let fplSession = null;
 let fplLoginError = null;
 let fplLoginDebug = null; // stores last login attempt debug info
+let fplRefreshToken = null;
 
 // =====================
 // FPL LOGIN via PingOne DaVinci SSO
@@ -263,10 +265,92 @@ function setFplSession(token) {
 }
 
 // =====================
-// Device Code Flow — user authorizes in browser, bot gets token
+// Authorization Code + PKCE Flow
+// User logs in via browser, copies redirect URL, bot exchanges code for token
 // =====================
 
-let fplRefreshToken = null;
+let pendingPkce = null; // { codeVerifier, state }
+
+function generatePkce() {
+  const codeVerifier = crypto.randomBytes(32).toString('base64url');
+  const codeChallenge = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
+  const state = crypto.randomBytes(16).toString('hex');
+  return { codeVerifier, codeChallenge, state };
+}
+
+function startAuthCodeFlow() {
+  const pkce = generatePkce();
+  pendingPkce = { codeVerifier: pkce.codeVerifier, state: pkce.state };
+
+  const params = new URLSearchParams({
+    client_id: PINGONE_CLIENT_ID,
+    response_type: 'code',
+    redirect_uri: 'https://www.premierleague.com/',
+    scope: 'openid',
+    code_challenge: pkce.codeChallenge,
+    code_challenge_method: 'S256',
+    state: pkce.state,
+  });
+
+  return `${PINGONE_AUTH_ROOT}/${PINGONE_ENV_ID}/as/authorize?${params.toString()}`;
+}
+
+async function exchangeAuthCode(redirectUrl) {
+  if (!pendingPkce) {
+    return { success: false, error: 'Tidak ada login yang sedang berlangsung. Jalankan /fpllogin dulu.' };
+  }
+
+  // Extract code from redirect URL
+  let code;
+  try {
+    const url = new URL(redirectUrl);
+    code = url.searchParams.get('code');
+  } catch {
+    // Maybe user pasted just the code
+    code = redirectUrl.trim();
+  }
+
+  if (!code) {
+    return { success: false, error: 'Tidak menemukan kode otorisasi di URL. Pastikan copy URL lengkap.' };
+  }
+
+  try {
+    const { data } = await axios.post(
+      `${PINGONE_AUTH_ROOT}/${PINGONE_ENV_ID}/as/token`,
+      new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: code,
+        client_id: PINGONE_CLIENT_ID,
+        redirect_uri: 'https://www.premierleague.com/',
+        code_verifier: pendingPkce.codeVerifier,
+      }).toString(),
+      {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        validateStatus: () => true,
+        timeout: 15000,
+      }
+    );
+
+    pendingPkce = null;
+
+    if (data.access_token) {
+      fplSession = `Bearer ${data.access_token}`;
+      fplRefreshToken = data.refresh_token || null;
+      fplLoginError = null;
+      console.log('✅ FPL auth code login berhasil');
+      return { success: true };
+    }
+
+    return { success: false, error: data.error_description || data.error || 'Token exchange gagal' };
+  } catch (err) {
+    pendingPkce = null;
+    return { success: false, error: err.message };
+  }
+}
+
+// =====================
+// Device Code Flow — user authorizes in browser, bot gets token
+// =====================
 
 async function startDeviceCodeFlow() {
   try {
@@ -471,4 +555,5 @@ module.exports = {
   fetchManagerInfo, fetchManagerPicks, fetchManagerTransfers, clearCache,
   fetchMyTeam, fplLogin, getFplLoginError, getFplLoginDebug, setFplSession,
   startDeviceCodeFlow, pollDeviceCodeToken, refreshFplToken,
+  startAuthCodeFlow, exchangeAuthCode,
 };

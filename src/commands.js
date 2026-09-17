@@ -1,4 +1,4 @@
-const { fetchAll, fetchBootstrap, fetchManagerInfo, fetchManagerPicks, fetchManagerTransfers, fetchMyTeam, fplLogin, getFplLoginError, getFplLoginDebug, setFplSession, startDeviceCodeFlow, pollDeviceCodeToken } = require('./fpl-api');
+const { fetchAll, fetchBootstrap, fetchManagerInfo, fetchManagerPicks, fetchManagerTransfers, fetchMyTeam, fplLogin, getFplLoginError, getFplLoginDebug, setFplSession, startDeviceCodeFlow, pollDeviceCodeToken, startAuthCodeFlow, exchangeAuthCode } = require('./fpl-api');
 const { scoreAllPlayers } = require('./scoring');
 const {
   addToWatchlist, removeFromWatchlist, getWatchlist,
@@ -229,7 +229,7 @@ function registerCommands(bot) {
         '/xadd · /xdel — Kelola akun X',
         '/igadd · /igdel — Kelola akun IG',
         '/fplstatus — Cek status FPL login & data',
-        '/fpllogin — Login FPL via browser (device code)',
+        '/fpllogin — Login FPL via browser',
         '/fpltoken — Set token FPL manual (dari browser)',
         '/setenv · /getenv · /delenv · /restart',
         '/refreshhistory — Refresh data historis',
@@ -1453,45 +1453,39 @@ function registerCommands(bot) {
     ctx.replyWithHTML(lines.join('\n'));
   });
 
-  // /fpllogin — Device Code Flow login (owner only)
+  // /fpllogin — Auth Code + PKCE login (owner only)
   bot.command('fpllogin', async ctx => {
     if (!isOwner(ctx)) return ctx.reply('🚫 Hanya pemilik bot yang bisa menggunakan perintah ini.');
 
-    const statusMsg = await ctx.replyWithHTML(
-      '🔐 <b>Memulai FPL Login...</b>\n\nMenghubungi PingOne...'
-    );
+    const authUrl = startAuthCodeFlow();
 
-    const deviceData = await startDeviceCodeFlow();
-    if (!deviceData?.device_code) {
-      return ctx.telegram.editMessageText(
-        ctx.chat.id, statusMsg.message_id, null,
-        '❌ Device code flow tidak tersedia.\n\n' +
-        'PingOne mungkin tidak mendukung flow ini untuk FPL.\n' +
-        'Gunakan /fpltoken sebagai alternatif.',
-      );
+    return ctx.replyWithHTML(
+      '🔐 <b>FPL Login</b>\n\n' +
+      '<b>Langkah 1:</b> Buka link ini dan login:\n' +
+      `<a href="${authUrl}">Klik untuk Login FPL</a>\n\n` +
+      '<b>Langkah 2:</b> Setelah login berhasil, kamu akan diarahkan ke halaman Premier League.\n' +
+      'Copy <b>seluruh URL</b> dari address bar browser.\n' +
+      '(URL akan mengandung <code>?code=...</code>)\n\n' +
+      '<b>Langkah 3:</b> Paste URL tersebut ke sini:\n' +
+      '<code>/fplcode URL_YANG_KAMU_COPY</code>\n\n' +
+      '<i>Contoh:</i>\n' +
+      '<code>/fplcode https://www.premierleague.com/?code=abc123&amp;state=xyz</code>',
+      { disable_web_page_preview: true }
+    );
+  });
+
+  // /fplcode — Exchange auth code from redirect URL (owner only)
+  bot.command('fplcode', async ctx => {
+    if (!isOwner(ctx)) return ctx.reply('🚫 Hanya pemilik bot yang bisa menggunakan perintah ini.');
+
+    const input = ctx.message.text.split(' ').slice(1).join(' ').trim();
+    if (!input) {
+      return ctx.reply('Paste URL redirect setelah login.\nContoh: /fplcode https://www.premierleague.com/?code=abc123&state=xyz');
     }
 
-    const verifyUrl = deviceData.verification_uri_complete || deviceData.verification_uri;
-    const userCode = deviceData.user_code;
-    const expiresMin = Math.round((deviceData.expires_in || 600) / 60);
+    const msg = await ctx.reply('🔄 Menukar kode otorisasi...');
 
-    await ctx.telegram.editMessageText(
-      ctx.chat.id, statusMsg.message_id, null,
-      `🔑 <b>FPL Login — Device Code</b>\n\n` +
-      `1. Buka link ini di browser/HP:\n<a href="${verifyUrl}">${verifyUrl}</a>\n\n` +
-      (userCode ? `2. Masukkan kode: <code>${userCode}</code>\n\n` : '') +
-      `3. Login dengan akun FPL seperti biasa\n\n` +
-      `⏳ Menunggu kamu login... (${expiresMin} menit)\n` +
-      `<i>Bot akan otomatis mendeteksi saat login selesai.</i>`,
-      { parse_mode: 'HTML', disable_web_page_preview: true }
-    );
-
-    // Poll for token in background
-    const result = await pollDeviceCodeToken(
-      deviceData.device_code,
-      deviceData.interval || 5,
-      deviceData.expires_in || 600
-    );
+    const result = await exchangeAuthCode(input);
 
     if (result.success) {
       // Test with my-team
@@ -1504,22 +1498,23 @@ function registerCommands(bot) {
             const captain = myTeam.picks.find(p => p.is_captain);
             teamInfo = `\n\n👥 ${myTeam.picks.length} pemain\n` +
               `👑 Captain ID: ${captain?.element || '?'}\n` +
-              `💰 Bank: £${((myTeam.transfers?.bank || 0) / 10).toFixed(1)}m`;
+              `💰 Bank: £${((myTeam.transfers?.bank || 0) / 10).toFixed(1)}m\n` +
+              `🔄 Free transfers: ${myTeam.transfers?.limit ?? '?'}`;
           }
         } catch {}
       }
 
       await ctx.telegram.editMessageText(
-        ctx.chat.id, statusMsg.message_id, null,
+        ctx.chat.id, msg.message_id, null,
         `✅ <b>Login Berhasil!</b>${teamInfo}\n\n` +
         `<i>Token akan auto-refresh. Jika expired, jalankan /fpllogin lagi.</i>`,
         { parse_mode: 'HTML' }
       );
     } else {
       await ctx.telegram.editMessageText(
-        ctx.chat.id, statusMsg.message_id, null,
+        ctx.chat.id, msg.message_id, null,
         `❌ <b>Login Gagal</b>\n\n${result.error}\n\n` +
-        `Coba lagi dengan /fpllogin atau gunakan /fpltoken.`,
+        `Coba /fpllogin lagi untuk generate link baru.`,
         { parse_mode: 'HTML' }
       );
     }
