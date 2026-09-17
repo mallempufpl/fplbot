@@ -1,4 +1,4 @@
-const { fetchAll, fetchBootstrap, fetchManagerInfo, fetchManagerPicks, fetchManagerTransfers, fetchMyTeam, fplLogin } = require('./fpl-api');
+const { fetchAll, fetchBootstrap, fetchManagerInfo, fetchManagerPicks, fetchManagerTransfers, fetchMyTeam, fplLogin, getFplLoginError } = require('./fpl-api');
 const { scoreAllPlayers } = require('./scoring');
 const {
   addToWatchlist, removeFromWatchlist, getWatchlist,
@@ -1375,11 +1375,15 @@ function registerCommands(bot) {
               }
             }
           } else {
-            lines.push('  ❌ Login GAGAL — tidak dapat session cookie.');
-            lines.push('  Kemungkinan:');
-            lines.push('  • Email/password salah');
-            lines.push('  • Akun belum verifikasi email');
-            lines.push('  • FPL sedang maintenance');
+            const reason = getFplLoginError() || 'tidak dapat session cookie';
+            lines.push(`  ❌ Login GAGAL — ${reason}`);
+            if (reason.includes('CAPTCHA')) {
+              lines.push('');
+              lines.push('  <i>⚠️ FPL memblokir login otomatis dari server.');
+              lines.push('  Ini adalah limitasi dari FPL, bukan bug bot.');
+              lines.push('  Fitur live squad (sebelum deadline) tidak tersedia.</i>');
+              lines.push('  <i>Squad tetap bisa dilihat setelah deadline GW lewat.</i>');
+            }
           }
         } catch (err) {
           lines.push(`  ❌ Login ERROR: ${err.message}`);
