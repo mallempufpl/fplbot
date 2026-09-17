@@ -397,24 +397,73 @@ function registerCommands(bot) {
 
     try {
       ctx.reply('⏳ Mengambil data squad...');
-      const [manager, { scored, teams, currentGw }] = await Promise.all([
+      const [manager, { scored, teams, currentGw }, transfers] = await Promise.all([
         fetchManagerInfo(managerId),
         getScoredPlayers(),
+        fetchManagerTransfers(managerId),
       ]);
 
-      // Coba ambil picks GW terkini, fallback ke GW sebelumnya
+      // Tentukan GW yang sedang ditampilkan
+      const { fetchBootstrap } = require('./fpl-api');
+      const bootstrap = await fetchBootstrap();
+      const nextGw = bootstrap.events.find(e => e.is_next)?.id || currentGw;
+
       let picks;
-      try {
-        picks = await fetchManagerPicks(managerId, currentGw);
-      } catch {
-        if (currentGw > 1) {
-          picks = await fetchManagerPicks(managerId, currentGw - 1);
-        } else {
-          return ctx.reply('❌ Belum ada data squad untuk musim ini.');
+      let displayGw = currentGw;
+      let isProjected = false;
+
+      // 1. Coba ambil picks GW berikutnya (tersedia setelah deadline)
+      if (nextGw > currentGw) {
+        try {
+          picks = await fetchManagerPicks(managerId, nextGw);
+          displayGw = nextGw;
+        } catch {
+          // GW berikutnya belum tersedia — gunakan GW terakhir
         }
       }
 
-      ctx.replyWithHTML(fmt.squadCard(manager, picks, scored, teams, currentGw));
+      // 2. Fallback ke GW terakhir yang tersedia
+      if (!picks) {
+        try {
+          picks = await fetchManagerPicks(managerId, currentGw);
+          displayGw = currentGw;
+        } catch {
+          if (currentGw > 1) {
+            picks = await fetchManagerPicks(managerId, currentGw - 1);
+            displayGw = currentGw - 1;
+          } else {
+            return ctx.reply('❌ Belum ada data squad untuk musim ini.');
+          }
+        }
+      }
+
+      // 3. Terapkan transfer pending (untuk GW berikutnya) di atas picks terakhir
+      const pendingTransfers = transfers.filter(t => t.event > displayGw);
+      if (pendingTransfers.length > 0 && picks) {
+        isProjected = true;
+        const updatedPicks = [...picks.picks];
+        for (const tr of pendingTransfers) {
+          const idx = updatedPicks.findIndex(pk => pk.element === tr.element_out);
+          if (idx !== -1) {
+            updatedPicks[idx] = { ...updatedPicks[idx], element: tr.element_in };
+          }
+        }
+        picks = { ...picks, picks: updatedPicks };
+        displayGw = nextGw;
+      }
+
+      let output = fmt.squadCard(manager, picks, scored, teams, displayGw);
+
+      // Tambah info status data
+      if (isProjected) {
+        output += `\n\n📌 <i>Squad diproyeksikan dari GW${currentGw} + ${pendingTransfers.length} transfer pending.`;
+        output += `\nPerubahan lineup (bench/kapten) akan terlihat setelah deadline GW${nextGw}.</i>`;
+      } else if (nextGw > displayGw) {
+        output += `\n\n📌 <i>Menampilkan squad GW${displayGw} (terakhir dikonfirmasi).`;
+        output += `\nPerubahan lineup & transfer untuk GW${nextGw} akan terlihat setelah deadline.</i>`;
+      }
+
+      ctx.replyWithHTML(output);
     } catch (err) {
       console.error('Error /squad:', err.message);
       if (err.response?.status === 404) {
@@ -438,20 +487,45 @@ function registerCommands(bot) {
 
     try {
       ctx.reply('⏳ Menganalisa squad & mencari transfer terbaik...');
-      const [manager, { scored, teams, currentGw }] = await Promise.all([
+      const [manager, { scored, teams, currentGw }, transfers] = await Promise.all([
         fetchManagerInfo(managerId),
         getScoredPlayers(),
+        fetchManagerTransfers(managerId),
       ]);
 
+      const { fetchBootstrap } = require('./fpl-api');
+      const bootstrap = await fetchBootstrap();
+      const nextGw = bootstrap.events.find(e => e.is_next)?.id || currentGw;
+
       let picks;
-      try {
-        picks = await fetchManagerPicks(managerId, currentGw);
-      } catch {
-        if (currentGw > 1) {
-          picks = await fetchManagerPicks(managerId, currentGw - 1);
-        } else {
-          return ctx.reply('❌ Belum ada data squad.');
+      // Coba next GW dulu, fallback ke current, lalu current-1
+      if (nextGw > currentGw) {
+        try { picks = await fetchManagerPicks(managerId, nextGw); } catch {}
+      }
+      if (!picks) {
+        try {
+          picks = await fetchManagerPicks(managerId, currentGw);
+        } catch {
+          if (currentGw > 1) {
+            picks = await fetchManagerPicks(managerId, currentGw - 1);
+          } else {
+            return ctx.reply('❌ Belum ada data squad.');
+          }
         }
+      }
+
+      // Terapkan transfer pending
+      const picksGw = picks.entry_history?.event || currentGw;
+      const pendingTransfers = transfers.filter(t => t.event > picksGw);
+      if (pendingTransfers.length > 0) {
+        const updatedPicks = [...picks.picks];
+        for (const tr of pendingTransfers) {
+          const idx = updatedPicks.findIndex(pk => pk.element === tr.element_out);
+          if (idx !== -1) {
+            updatedPicks[idx] = { ...updatedPicks[idx], element: tr.element_in };
+          }
+        }
+        picks = { ...picks, picks: updatedPicks };
       }
 
       const bank = (picks.entry_history?.bank || 0);
