@@ -1,4 +1,4 @@
-const { fetchAll, fetchManagerInfo, fetchManagerPicks, fetchManagerTransfers, fetchMyTeam } = require('./fpl-api');
+const { fetchAll, fetchBootstrap, fetchManagerInfo, fetchManagerPicks, fetchManagerTransfers, fetchMyTeam, fplLogin } = require('./fpl-api');
 const { scoreAllPlayers } = require('./scoring');
 const {
   addToWatchlist, removeFromWatchlist, getWatchlist,
@@ -228,6 +228,7 @@ function registerCommands(bot) {
         '/removeuser &lt;chat_id&gt; — Hapus user',
         '/xadd · /xdel — Kelola akun X',
         '/igadd · /igdel — Kelola akun IG',
+        '/fplstatus — Cek status FPL login & data',
         '/setenv · /getenv · /delenv · /restart',
         '/refreshhistory — Refresh data historis',
       ] : []),
@@ -512,7 +513,6 @@ function registerCommands(bot) {
       ]);
 
       // Tentukan GW yang sedang ditampilkan
-      const { fetchBootstrap } = require('./fpl-api');
       const bootstrap = await fetchBootstrap();
       const nextGw = bootstrap.events.find(e => e.is_next)?.id || currentGw;
 
@@ -624,7 +624,6 @@ function registerCommands(bot) {
         }),
       ]);
 
-      const { fetchBootstrap } = require('./fpl-api');
       const bootstrap = await fetchBootstrap();
       const nextGw = bootstrap.events.find(e => e.is_next)?.id || currentGw;
 
@@ -1282,6 +1281,116 @@ function registerCommands(bot) {
       console.error('Error /refreshhistory:', err.message);
       ctx.reply('❌ Gagal refresh data historis.');
     }
+  });
+
+  // /fplstatus — Cek status FPL login & data GW (owner only)
+  bot.command('fplstatus', async ctx => {
+    if (!isOwner(ctx)) return ctx.reply('🚫 Hanya pemilik bot.');
+
+    const lines = ['<b>🔍 FPL Status Check</b>\n'];
+
+    // 1. Cek env
+    const email = process.env.FPL_EMAIL;
+    const password = process.env.FPL_PASSWORD;
+    const fplId = parseInt(process.env.FPL_ID);
+
+    lines.push('<b>⚙️ Konfigurasi:</b>');
+    lines.push(`  FPL_EMAIL: ${email ? '✅ ' + email.substring(0, 3) + '****' : '❌ Belum di-set'}`);
+    lines.push(`  FPL_PASSWORD: ${password ? '✅ (tersimpan)' : '❌ Belum di-set'}`);
+    lines.push(`  FPL_ID: ${fplId ? '✅ ' + fplId : '❌ Belum di-set'}`);
+    lines.push('');
+
+    // 2. Cek GW info
+    try {
+      const bootstrap = await fetchBootstrap();
+      const currentGw = bootstrap.events.find(e => e.is_current);
+      const nextGw = bootstrap.events.find(e => e.is_next);
+
+      lines.push('<b>📅 Gameweek Info:</b>');
+      if (currentGw) {
+        lines.push(`  Current: GW${currentGw.id} (${currentGw.finished ? 'selesai' : 'berlangsung'})`);
+        lines.push(`  Deadline: ${new Date(currentGw.deadline_time).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}`);
+      }
+      if (nextGw) {
+        lines.push(`  Next: GW${nextGw.id}`);
+        lines.push(`  Deadline: ${new Date(nextGw.deadline_time).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta' })}`);
+      }
+      lines.push('');
+
+      // 3. Cek picks availability
+      if (fplId) {
+        lines.push('<b>📋 Squad Data (picks):</b>');
+        const gwsToCheck = [];
+        if (nextGw) gwsToCheck.push(nextGw.id);
+        if (currentGw) gwsToCheck.push(currentGw.id);
+        if (currentGw) {
+          for (let gw = currentGw.id - 1; gw >= Math.max(1, currentGw.id - 2); gw--) {
+            gwsToCheck.push(gw);
+          }
+        }
+
+        for (const gw of gwsToCheck) {
+          try {
+            const picks = await fetchManagerPicks(fplId, gw);
+            const captain = picks.picks?.find(p => p.is_captain);
+            lines.push(`  GW${gw}: ✅ tersedia (${picks.picks?.length} pemain, captain ID: ${captain?.element || '?'})`);
+          } catch (err) {
+            lines.push(`  GW${gw}: ❌ ${err.response?.status === 404 ? 'belum tersedia' : err.message}`);
+          }
+        }
+        lines.push('');
+      }
+
+      // 4. Test FPL login
+      lines.push('<b>🔐 FPL Login Test:</b>');
+      if (!email || !password) {
+        lines.push('  ⚠️ Email/password belum di-set. Login tidak bisa diuji.');
+        lines.push('  Set via: <code>/setenv FPL_EMAIL your@email.com</code>');
+        lines.push('  Dan: <code>/setenv FPL_PASSWORD yourpassword</code>');
+      } else {
+        try {
+          const session = await fplLogin();
+          if (session) {
+            lines.push('  ✅ Login BERHASIL — session cookie didapat.');
+
+            // 5. Test my-team
+            if (fplId) {
+              try {
+                const myTeam = await fetchMyTeam(fplId);
+                if (myTeam?.picks) {
+                  const captain = myTeam.picks.find(p => p.is_captain);
+                  const viceCaptain = myTeam.picks.find(p => p.is_vice_captain);
+                  lines.push(`  ✅ My-team OK — ${myTeam.picks.length} pemain`);
+                  lines.push(`  👑 Captain ID: ${captain?.element || '?'}, VC ID: ${viceCaptain?.element || '?'}`);
+                  lines.push(`  💰 Bank: £${((myTeam.transfers?.bank || 0) / 10).toFixed(1)}m`);
+                  lines.push(`  🔄 Free transfers: ${myTeam.transfers?.limit ?? '?'}`);
+                  lines.push('');
+                  lines.push('  <i>✅ Data live squad (sebelum deadline) AKTIF.</i>');
+                } else {
+                  lines.push('  ⚠️ My-team response kosong — mungkin bukan FPL ID kamu.');
+                }
+              } catch (err) {
+                lines.push(`  ❌ My-team gagal: ${err.message}`);
+                lines.push('  <i>Pastikan FPL_ID adalah ID tim kamu sendiri.</i>');
+              }
+            }
+          } else {
+            lines.push('  ❌ Login GAGAL — tidak dapat session cookie.');
+            lines.push('  Kemungkinan:');
+            lines.push('  • Email/password salah');
+            lines.push('  • Akun belum verifikasi email');
+            lines.push('  • FPL sedang maintenance');
+          }
+        } catch (err) {
+          lines.push(`  ❌ Login ERROR: ${err.message}`);
+        }
+      }
+
+    } catch (err) {
+      lines.push(`❌ Gagal mengambil data FPL API: ${err.message}`);
+    }
+
+    ctx.replyWithHTML(lines.join('\n'));
   });
 
   // /refresh
