@@ -203,7 +203,7 @@ function registerCommands(bot) {
       '',
       '<b>👤 Squad & Transfer:</b>',
       '/squad — Lihat squad kamu',
-      '/bestxi — Starting XI terbaik dari squad kamu',
+      '/best11 — Starting XI terbaik dari squad kamu',
       '/suggest — Saran transfer terbaik',
       '/trending — Transfer in &amp; out terpopuler',
       '/nettransfer — Net transfer (gainers vs losers)',
@@ -604,15 +604,15 @@ function registerCommands(bot) {
     }
   });
 
-  // /bestxi [FPL ID]
-  bot.command('bestxi', async ctx => {
-    const input = ctx.message.text.replace(/^\/bestxi\s*/i, '').trim();
+  // /best11 [FPL ID]
+  bot.command('best11', async ctx => {
+    const input = ctx.message.text.replace(/^\/best11\s*/i, '').trim();
     const managerId = parseInt(input) || getUserFplId(ctx);
     if (!managerId || isNaN(managerId)) {
       return ctx.replyWithHTML(
         'FPL ID belum terdaftar.\n\n' +
         'Gunakan <code>/start [FPL ID]</code> untuk mendaftar.\n' +
-        'Atau: <code>/bestxi [FPL ID]</code>'
+        'Atau: <code>/best11 [FPL ID]</code>'
       );
     }
 
@@ -776,7 +776,7 @@ function registerCommands(bot) {
 
       ctx.replyWithHTML(fmt.bestXICard(manager, result, displayGw));
     } catch (err) {
-      console.error('Error /bestxi:', err.message, err.stack);
+      console.error('Error /best11:', err.message, err.stack);
       if (err.response?.status === 404) {
         return ctx.reply(`❌ FPL ID ${managerId} tidak ditemukan.`);
       }
