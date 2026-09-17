@@ -130,16 +130,37 @@ async function fplLogin() {
       return null;
     }
 
-    // Step 3: Submit bot protection + login credentials in ONE request
-    // DaVinci customHTMLTemplate may combine protectsdk + login fields on same screen
-    console.log('DaVinci step3: submitting combined protectsdk + credentials');
-    const loginResp = await axios.post(
+    // Step 3: Submit bot protection (protectsdk) — flat parameters
+    console.log('DaVinci step3: submitting bot protection (flat)');
+    const botResp = await axios.post(
       `${base}/davinci/connections/${flowResp.data.connectionId}/capabilities/${flowResp.data.capabilityName}`,
       {
         id: flowResp.data.id,
         eventName: 'continue',
+        parameters: { protectsdk: '' },
+      },
+      { headers: { ...hdr, interactionid: interactionId }, validateStatus: () => true, timeout: 15000 }
+    );
+
+    console.log(`DaVinci step3 response: status=${botResp.status}, screen=${botResp.data.screen?.name}, connId=${botResp.data.connectionId}`);
+    fplLoginDebug.steps.push({
+      step: 3, name: 'bot-protection', status: botResp.status,
+      screenName: botResp.data.screen?.name || null,
+      hasConnectionId: !!botResp.data.connectionId,
+    });
+
+    // Step 4: Submit login credentials to the login form screen
+    const loginConnId = botResp.data.connectionId || flowResp.data.connectionId;
+    const loginCapName = botResp.data.capabilityName || flowResp.data.capabilityName;
+    const loginId = botResp.data.id || flowResp.data.id;
+
+    console.log(`DaVinci step4: submitting credentials to conn=${loginConnId}, cap=${loginCapName}`);
+    const loginResp = await axios.post(
+      `${base}/davinci/connections/${loginConnId}/capabilities/${loginCapName}`,
+      {
+        id: loginId,
+        eventName: 'continue',
         parameters: {
-          protectsdk: '',
           username: email,
           password: password,
           buttonValue: 'SIGNON',
@@ -150,11 +171,10 @@ async function fplLogin() {
 
     console.log(`FPL PingOne login: status=${loginResp.status}, respKeys=${Object.keys(loginResp.data || {}).join(',')}`);
     fplLoginDebug.steps.push({
-      step: 3, name: 'combined-submit', status: loginResp.status,
-      approach: 'combined (protectsdk + credentials in one)',
+      step: 4, name: 'login-submit', status: loginResp.status,
       hasAuthCode: !!loginResp.data.authorizeResponse?.code,
       errorCode: loginResp.data.code || null,
-      errorReason: loginResp.data.error_reason || null,
+      errorReason: loginResp.data.error_reason || loginResp.data.description || null,
       screenName: loginResp.data.screen?.name || null,
       respSnippet: JSON.stringify(loginResp.data).substring(0, 400),
     });
