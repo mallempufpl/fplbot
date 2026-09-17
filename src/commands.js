@@ -125,36 +125,9 @@ function registerCommands(bot) {
   // =====================
   bot.command('start', async ctx => {
     const user = getUser(ctx.from.id);
-
-    // User belum terdaftar → tampilkan welcome + minta FPL ID
-    if (!user && !isOwner(ctx)) {
-      return ctx.replyWithHTML([
-        `👋 <b>Selamat Datang di FPL Differential Bot!</b>`,
-        ``,
-        `Halo <b>${ctx.from.first_name || 'Sobat FPL'}</b>! Bot ini akan membantu kamu:`,
-        ``,
-        `⚽ Analisa pemain dengan metrik canggih + data 3 musim`,
-        `📊 Rekomendasi transfer berdasarkan quality score`,
-        `💎 Temukan differential picks tersembunyi`,
-        `📰 Update berita FPL dari X & Instagram`,
-        `📈 Tren transfer in/out terpopuler`,
-        ``,
-        `<b>Untuk mulai, daftarkan FPL ID kamu:</b>`,
-        `<code>/start [FPL ID]</code>`,
-        ``,
-        `<b>Contoh:</b> <code>/start 1234567</code>`,
-        ``,
-        `<b>Cara cari FPL ID:</b>`,
-        `1. Buka fantasy.premierleague.com`,
-        `2. Login → klik "Points" atau "My Team"`,
-        `3. Lihat angka di URL: /entry/<b>XXXXX</b>/event/...`,
-        ``,
-        `💡 FPL ID bukan username, tapi angka di URL halaman tim kamu.`,
-      ].join('\n'));
-    }
+    const arg = ctx.message.text.replace(/^\/start\s*/i, '').trim();
 
     // Cek apakah ada FPL ID di argumen (registrasi atau update)
-    const arg = ctx.message.text.replace(/^\/start\s*/i, '').trim();
     if (arg) {
       const fplId = parseInt(arg);
       if (!fplId || isNaN(fplId)) {
@@ -185,6 +158,33 @@ function registerCommands(bot) {
         }
         return ctx.reply('❌ Gagal memverifikasi FPL ID. Coba lagi nanti.');
       }
+    }
+
+    // User belum terdaftar & tidak kirim FPL ID → tampilkan welcome
+    if (!user && !isOwner(ctx)) {
+      return ctx.replyWithHTML([
+        `👋 <b>Selamat Datang di FPL Differential Bot!</b>`,
+        ``,
+        `Halo <b>${ctx.from.first_name || 'Sobat FPL'}</b>! Bot ini akan membantu kamu:`,
+        ``,
+        `⚽ Analisa pemain dengan metrik canggih + data 3 musim`,
+        `📊 Rekomendasi transfer berdasarkan quality score`,
+        `💎 Temukan differential picks tersembunyi`,
+        `📰 Update berita FPL dari X & Instagram`,
+        `📈 Tren transfer in/out terpopuler`,
+        ``,
+        `<b>Untuk mulai, daftarkan FPL ID kamu:</b>`,
+        `<code>/start [FPL ID]</code>`,
+        ``,
+        `<b>Contoh:</b> <code>/start 1234567</code>`,
+        ``,
+        `<b>Cara cari FPL ID:</b>`,
+        `1. Buka fantasy.premierleague.com`,
+        `2. Login → klik "Points" atau "My Team"`,
+        `3. Lihat angka di URL: /entry/<b>XXXXX</b>/event/...`,
+        ``,
+        `💡 FPL ID bukan username, tapi angka di URL halaman tim kamu.`,
+      ].join('\n'));
     }
 
     // User sudah terdaftar atau owner → tampilkan menu
