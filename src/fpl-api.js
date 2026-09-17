@@ -55,6 +55,7 @@ function clearCache() {
 
 let fplSession = null;
 let fplLoginError = null;
+let fplLoginDebug = null; // stores last login attempt debug info
 
 // =====================
 // FPL LOGIN via PingOne DaVinci SSO
@@ -83,8 +84,11 @@ async function fplLogin() {
   const password = process.env.FPL_PASSWORD;
   if (!email || !password) {
     fplLoginError = 'FPL_EMAIL atau FPL_PASSWORD belum di-set';
+    fplLoginDebug = null;
     return null;
   }
+
+  fplLoginDebug = { steps: [] };
 
   try {
     // Step 1: Start OAuth authorize — get DaVinci flow config
@@ -103,6 +107,7 @@ async function fplLogin() {
     );
 
     const skProps = extractSkProps(authResp.data);
+    fplLoginDebug.steps.push({ step: 1, name: 'authorize', status: authResp.status, hasSkProps: !!skProps });
     if (!skProps?.accessToken || !skProps?.policyId) {
       fplLoginError = 'Gagal mendapatkan DaVinci flow config dari FPL';
       console.error('❌ FPL login: skProps not found in authorize response');
@@ -119,6 +124,7 @@ async function fplLogin() {
       { headers: hdr, validateStatus: () => true, timeout: 15000 }
     );
     const interactionId = flowResp.data.interactionId;
+    fplLoginDebug.steps.push({ step: 2, name: 'flow-start', status: flowResp.status, hasInteraction: !!interactionId });
     if (!interactionId) {
       fplLoginError = 'Gagal memulai DaVinci login flow';
       return null;
@@ -135,22 +141,62 @@ async function fplLogin() {
       { headers: { ...hdr, interactionid: interactionId }, validateStatus: () => true, timeout: 15000 }
     );
 
+    // Log bot protection response to discover expected form fields
+    console.log('DaVinci step3 (bot protection) response keys:', JSON.stringify({
+      status: botResp.status,
+      connectionId: botResp.data.connectionId,
+      capabilityName: botResp.data.capabilityName,
+      formFields: botResp.data.form?.fields,
+      screen: botResp.data.screen,
+      formKeys: botResp.data.form ? Object.keys(botResp.data.form) : null,
+      topKeys: Object.keys(botResp.data || {}),
+    }).substring(0, 1000));
+
+    // Detect form field names from DaVinci response
+    const formFields = botResp.data.form?.fields || [];
+    const fieldNames = formFields.map(f => f.key || f.name || f.propertyName).filter(Boolean);
+    console.log('DaVinci expected login field names:', fieldNames);
+    fplLoginDebug.steps.push({
+      step: 3, name: 'bot-protection', status: botResp.status,
+      hasConnectionId: !!botResp.data.connectionId,
+      screenName: botResp.data.screen?.name || null,
+      detectedFields: fieldNames,
+      topKeys: Object.keys(botResp.data || {}),
+    });
+
+    // Build login parameters using detected field names or fallback to common PingOne names
+    const loginParams = {};
+    const emailFieldName = fieldNames.find(f => /email|username|identifier|signonidentifier/i.test(f)) || 'username';
+    const passFieldName = fieldNames.find(f => /password|signonpassword/i.test(f)) || 'password';
+    loginParams[emailFieldName] = email;
+    loginParams[passFieldName] = password;
+    // Add button/submit value
+    const btnFieldName = fieldNames.find(f => /button|submit|action/i.test(f)) || 'buttonValue';
+    loginParams[btnFieldName] = 'SIGNON';
+
+    console.log(`DaVinci login fields: email="${emailFieldName}", pass="${passFieldName}", btn="${btnFieldName}"`);
+
     // Step 4: Submit login credentials
     const loginResp = await axios.post(
       `${base}/davinci/connections/${botResp.data.connectionId}/capabilities/${botResp.data.capabilityName}`,
       {
         id: botResp.data.id,
         eventName: 'continue',
-        parameters: {
-          username: email,
-          password: password,
-          buttonValue: 'SIGNON',
-        },
+        parameters: loginParams,
       },
       { headers: { ...hdr, interactionid: interactionId }, validateStatus: () => true, timeout: 15000 }
     );
 
-    console.log(`FPL PingOne login: status=${loginResp.status}`);
+    console.log(`FPL PingOne login: status=${loginResp.status}, respKeys=${Object.keys(loginResp.data || {}).join(',')}`);
+    fplLoginDebug.steps.push({
+      step: 4, name: 'login-submit', status: loginResp.status,
+      usedFields: { email: emailFieldName, pass: passFieldName, btn: btnFieldName },
+      hasAuthCode: !!loginResp.data.authorizeResponse?.code,
+      errorCode: loginResp.data.code || null,
+      errorReason: loginResp.data.error_reason || null,
+      screenName: loginResp.data.screen?.name || null,
+      respSnippet: JSON.stringify(loginResp.data).substring(0, 300),
+    });
 
     // Check for auth code in response
     if (loginResp.data.authorizeResponse?.code) {
@@ -211,6 +257,10 @@ async function fplLogin() {
 
 function getFplLoginError() {
   return fplLoginError;
+}
+
+function getFplLoginDebug() {
+  return fplLoginDebug;
 }
 
 function buildAuthHeaders() {
@@ -312,5 +362,5 @@ async function fetchAll() {
 module.exports = {
   fetchAll, fetchBootstrap, fetchFixtures, fetchPlayerHistory,
   fetchManagerInfo, fetchManagerPicks, fetchManagerTransfers, clearCache,
-  fetchMyTeam, fplLogin, getFplLoginError,
+  fetchMyTeam, fplLogin, getFplLoginError, getFplLoginDebug,
 };

@@ -1,4 +1,4 @@
-const { fetchAll, fetchBootstrap, fetchManagerInfo, fetchManagerPicks, fetchManagerTransfers, fetchMyTeam, fplLogin, getFplLoginError } = require('./fpl-api');
+const { fetchAll, fetchBootstrap, fetchManagerInfo, fetchManagerPicks, fetchManagerTransfers, fetchMyTeam, fplLogin, getFplLoginError, getFplLoginDebug } = require('./fpl-api');
 const { scoreAllPlayers } = require('./scoring');
 const {
   addToWatchlist, removeFromWatchlist, getWatchlist,
@@ -1427,6 +1427,29 @@ function registerCommands(bot) {
               lines.push('  <i>💡 Coba reset kredensial:</i>');
               lines.push('  <code>/setenv FPL_EMAIL your@email.com</code>');
               lines.push('  <code>/setenv FPL_PASSWORD yourpassword</code>');
+            }
+
+            // Show debug info for login flow
+            const debug = getFplLoginDebug();
+            if (debug?.steps?.length) {
+              lines.push('');
+              lines.push('<b>🔧 Login Flow Debug:</b>');
+              for (const s of debug.steps) {
+                const info = [`Step ${s.step} (${s.name}): HTTP ${s.status}`];
+                if (s.detectedFields?.length) info.push(`fields=[${s.detectedFields.join(',')}]`);
+                if (s.usedFields) info.push(`sent: email="${s.usedFields.email}", pass="${s.usedFields.pass}"`);
+                if (s.errorCode) info.push(`err=${s.errorCode}`);
+                if (s.errorReason) info.push(`reason=${s.errorReason}`);
+                if (s.screenName) info.push(`screen=${s.screenName}`);
+                lines.push(`  ${info.join(' | ')}`);
+              }
+              // Show response snippet from login step
+              const loginStep = debug.steps.find(s => s.step === 4);
+              if (loginStep?.respSnippet) {
+                lines.push('');
+                lines.push('<b>📋 Login Response:</b>');
+                lines.push(`<code>${loginStep.respSnippet.substring(0, 250)}</code>`);
+              }
             }
           }
         } catch (err) {
