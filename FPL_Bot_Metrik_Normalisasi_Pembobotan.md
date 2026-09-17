@@ -1,6 +1,6 @@
 # FPL Bot — Rumus Normalisasi & Pembobotan Metrik Analisa Pemain
 
-Dokumen acuan untuk membangun mesin skoring pemain FPL. Tujuannya: mengubah banyak
+Dokumen acuan untuk mesin skoring pemain FPL. Tujuannya: mengubah banyak
 metrik mentah dengan skala berbeda menjadi **satu skor komposit 0–100** yang bisa
 diranking secara adil, terutama untuk keputusan gameweek berikutnya (forward-looking).
 
@@ -16,311 +16,271 @@ diranking secara adil, terutama untuk keputusan gameweek berikutnya (forward-loo
 3. **Bandingkan seposisi.** Normalisasi dilakukan **per posisi** (GK/DEF/MID/FWD), bukan lintas posisi.
 4. **Sadar risiko.** Menit main tidak aman menurunkan skor, sebagus apa pun statistiknya.
 5. **Sadar sample size.** Di awal musim, statistik ditarik ke rata-rata (shrinkage) agar tidak menyesatkan.
+6. **Sadar tren jangka panjang.** Data 3 musim terakhir digunakan untuk mendeteksi pola IMPROVING, CONSISTENT, atau DECLINING.
 
 ---
 
 ## 2. Daftar Metrik, Field API, dan Arah
 
-Arah = apakah nilai lebih besar itu lebih baik (↑) atau lebih kecil lebih baik (↓).
+Arah = apakah nilai lebih besar itu lebih baik (+) atau lebih kecil lebih baik (-).
 
-| Metrik | Field API (perkiraan) | Arah | Kategori |
+| Metrik | Field API / Sumber | Arah | Kategori |
 |---|---|---|---|
-| xGI per 90 | `expected_goal_involvements`, `minutes` | ↑ | Underlying |
-| Form | `form` | ↑ | Momentum |
-| Points per game | `points_per_game` | ↑ | Performa |
-| Value (form per juta) | `form`, `now_cost` | ↑ | Efisiensi |
-| Kemudahan fixture (proyeksi) | dihitung dari FDR fixtures | ↑ | Konteks |
-| Keamanan menit | `minutes`, `starts`, `chance_of_playing_next_round`, `status` | ↑ | Risiko |
-| xGC per 90 (khusus GK/DEF) | `expected_goals_conceded`, `minutes` | ↓ | Defensif |
-| Clean sheet potential (GK/DEF) | dari kekuatan bertahan tim + fixture | ↑ | Defensif |
-| Ownership | `selected_by_percent` | — | Label strategi |
+| xGI per 90 | `expected_goal_involvements`, `minutes` | + | Underlying |
+| Form | `form` | + | Momentum |
+| Value (form per juta) | `form`, `now_cost` | + | Efisiensi |
+| Kemudahan fixture (proyeksi) | dihitung dari FDR fixtures | + | Konteks |
+| Keamanan menit | `minutes`, `starts`, `chance_of_playing_next_round`, `status` | + | Risiko |
+| xGC per 90 (GK/DEF) | `expected_goals_conceded`, `minutes` | - | Defensif |
+| Clean sheet potential (GK/DEF) | dari kekuatan bertahan tim + fixture | + | Defensif |
+| **Trend (historis 3 musim)** | GitHub CSV: PP90, xGI/90, minutes, ICT | + | Tren jangka panjang |
+| Ownership | `selected_by_percent` | n/a | Label strategi (bukan komponen skor) |
 
-`now_cost` bersatuan 0,1 juta → harga juta = `now_cost / 10`.
+`now_cost` bersatuan 0,1 juta -> harga juta = `now_cost / 10`.
 
 ---
 
-## 3. Normalisasi (menyamakan skala ke 0–1)
+## 3. Normalisasi (menyamakan skala ke 0-1)
 
-Tiap metrik punya skala berbeda (form 0–15, harga 4.0–15.0, xGI/90 0–1.5). Sebelum
-digabung, semua harus dibawa ke rentang **0–1**. Ada dua metode; pilih salah satu
-(atau sediakan keduanya sebagai opsi).
+Tiap metrik punya skala berbeda. Sebelum digabung, semua harus dibawa ke rentang **0-1**.
 
-### 3a. Min-Max (sederhana, intuitif)
+### 3a. Percentile Rank (metode utama)
 
-Untuk metrik **↑ (lebih besar lebih baik):**
-
-```
-n(x) = (x - min) / (max - min)
-```
-
-Untuk metrik **↓ (lebih kecil lebih baik)** — dibalik:
-
-```
-n(x) = (max - x) / (max - min)
-```
-
-`min` dan `max` diambil dari **populasi pemain seposisi** (lihat bagian 4).
-
-**Masalah:** sensitif terhadap outlier. Contoh: xGI Haaland yang ekstrem membuat `max`
-melonjak, sehingga pemain lain terlihat kecil semua. Solusinya **winsorize/clamp**:
-potong nilai ekstrem ke persentil 5 dan 95 sebelum normalisasi.
-
-```
-lo = persentil_5(populasi)
-hi = persentil_95(populasi)
-x_clamped = clamp(x, lo, hi)
-n(x) = (x_clamped - lo) / (hi - lo)      // untuk arah ↑
-```
-
-### 3b. Percentile Rank (lebih tahan outlier — direkomendasikan)
-
-Alih-alih memakai nilai absolut, pakai **peringkat relatif** pemain dalam populasi
-seposisi. Hasilnya selalu 0–1, tidak terganggu outlier, dan mudah dibaca ("pemain ini
-di persentil ke-80 untuk xGI").
+Pakai **peringkat relatif** pemain dalam populasi seposisi. Hasilnya selalu 0-1, tidak terganggu outlier.
 
 ```
 n(x) = (jumlah pemain dengan nilai < x) / (total pemain - 1)
 ```
 
-Untuk arah ↓ (mis. xGC), gunakan `1 - percentile_rank`.
+Untuk arah - (mis. xGC), gunakan `1 - percentile_rank`.
 
-> **Rekomendasi:** pakai **percentile rank** untuk metrik yang rawan outlier (xGI, value),
-> dan min-max ter-clamp untuk metrik yang sudah terbatas (form, chance_of_playing).
+### 3b. Min-Max (untuk metrik terbatas)
+
+Untuk metrik yang sudah terbatas skalanya (form, chance_of_playing):
+
+```
+n(x) = (x - min) / (max - min)     // arah +
+n(x) = (max - x) / (max - min)     // arah -
+```
+
+`min` dan `max` diambil dari populasi pemain seposisi. Nilai di-clamp ke [0, 1].
 
 ---
 
 ## 4. Normalisasi Per Posisi
 
-Bandingkan pemain hanya dengan yang **seposisi**. Kiper tidak diadu xGI-nya dengan penyerang.
-
-Langkah:
+Bandingkan pemain hanya dengan yang **seposisi**:
 1. Kelompokkan pemain berdasarkan `element_type` (1=GK, 2=DEF, 3=MID, 4=FWD).
-2. Untuk tiap grup, hitung `min`, `max`, `mean`, `std`, atau tabel percentile **per grup**.
+2. Untuk tiap grup, hitung statistik populasi (sorted array untuk percentile, min/max untuk min-max).
 3. Normalisasi tiap pemain terhadap statistik grupnya sendiri.
 
-Konsekuensi: skor 0.9 pada seorang bek berarti "bek yang sangat bagus", bukan
-dibandingkan dengan penyerang.
+Skor 0.9 pada seorang bek berarti "bek yang sangat bagus relatif terhadap bek lain".
 
 ---
 
 ## 5. Penyesuaian Sample Size (Shrinkage)
 
-Di awal musim (menit sedikit), xGI/90 bisa menyesatkan — satu pertandingan bagus bikin
-angka melambung. Solusinya: tarik nilai pemain ke **rata-rata posisinya** sebanding
-dengan sedikitnya menit main.
-
-Hitung bobot keyakinan berdasarkan menit (450 menit ≈ 5 laga penuh dianggap "cukup"):
+Di awal musim, xGI/90 bisa menyesatkan. Tarik nilai pemain ke rata-rata posisinya:
 
 ```
-w = min(minutes / 450, 1)          // 0 = belum kredibel, 1 = kredibel penuh
-```
-
-Lalu blend statistik pemain dengan rata-rata posisinya:
-
-```
+w = min(minutes / 450, 1)           // 0 = belum kredibel, 1 = kredibel penuh
 nilai_disesuaikan = w * nilai_pemain + (1 - w) * rata_rata_posisi
 ```
 
-Terapkan terutama pada metrik per-90 (xGI/90, xGC/90). Efeknya: pemain dengan menit
-sangat sedikit tidak langsung menduduki peringkat atas hanya karena kebetulan.
+Terapkan terutama pada metrik per-90 (xGI/90, xGC/90).
 
 ---
 
 ## 6. Proyeksi Kemudahan Fixture
 
-FDR bernilai 1 (mudah) sampai 5 (sulit). Ubah jadi **skor kemudahan** 0–1, lalu
-rata-ratakan beberapa GW ke depan dengan bobot menurun (GW terdekat lebih penting).
-
-Konversi satu fixture:
+FDR bernilai 1 (mudah) sampai 5 (sulit). Ubah jadi skor kemudahan 0-1:
 
 ```
-ease = (6 - FDR) / 5          // FDR 1 → 1.0 ; FDR 5 → 0.2
-```
-
-Opsional beri bonus kandang / penalti tandang:
-
-```
+ease = (6 - FDR) / 5               // FDR 1 -> 1.0 ; FDR 5 -> 0.2
 ease_adj = ease * (kandang ? 1.05 : 0.95)
 ```
 
-Proyeksi tertimbang untuk N gameweek (mis. N=4), bobot menurun:
+Proyeksi tertimbang untuk N=4 gameweek, bobot menurun:
 
 ```
-bobot = [0.40, 0.30, 0.20, 0.10]      // total = 1
-fixture_score = Σ (ease_adj[i] * bobot[i])   untuk i = 0..N-1
+bobot = [0.40, 0.30, 0.20, 0.10]
+fixture_score = sum(ease_adj[i] * bobot[i]) untuk i = 0..3
 ```
 
 Penanganan khusus:
-- **Double gameweek** (2 laga dalam 1 GW): jumlahkan ease kedua laga → skor lebih tinggi.
+- **Double gameweek** (2 laga dalam 1 GW): skor lebih tinggi.
 - **Blank gameweek** (tidak ada laga): ease = 0 untuk GW itu.
-
-`fixture_score` sudah dalam rentang 0–1, siap dimasukkan ke skor komposit.
 
 ---
 
 ## 7. Skor Keamanan Menit
 
-Gabungkan tiga sinyal jadi satu nilai 0–1:
+Gabungkan tiga sinyal jadi satu nilai 0-1:
 
 ```
-p_main   = (chance_of_playing_next_round ?? 100) / 100      // 0–1
-rasio_start = starts / laga_tim_sejauh_ini                  // 0–1
-tersedia  = (status == 'a') ? 1 : (status == 'd' ? 0.5 : 0) // a/d/i/s
+p_main    = (chance_of_playing_next_round ?? 100) / 100
+rasio_start = starts / laga_tim
+tersedia  = status == 'a' ? 1 : status == 'd' ? 0.5 : 0
 
 minutes_security = 0.5 * p_main + 0.3 * rasio_start + 0.2 * tersedia
 ```
 
-Nilai ini juga bisa dipakai sebagai **gerbang (gate)**: pemain dengan
-`minutes_security < 0.25` bisa diberi label "risiko rotasi/cedera" dan dikeluarkan dari
-rekomendasi utama, terlepas dari skornya.
+Pemain dengan `minutes_security < 0.25` diberi label "risiko rotasi/cedera".
 
 ---
 
-## 8. Pembobotan Per Posisi
+## 8. Trend Score (Historis 3 Musim)
 
-Setelah semua komponen dinormalisasi ke 0–1, gabungkan dengan **bobot yang berbeda per
-posisi**. Penyerang/gelandang menekankan serangan; kiper/bek menekankan pertahanan.
+### 8.1 Sumber Data
 
-| Komponen (0–1) | GK | DEF | MID | FWD |
+Data diambil dari GitHub repo `vaastav/Fantasy-Premier-League` (CSV) untuk 3 musim:
+- 2022-23
+- 2023-24
+- 2024-25
+
+Pemain di-match antar musim menggunakan key `first_name|second_name`.
+
+### 8.2 Metrik per Musim
+
+Untuk setiap pemain per musim, dihitung:
+- **PP90** — Points per 90 minutes
+- **xGI/90** — Expected Goal Involvement per 90
+- **Minutes** — Total menit bermain
+- **ICT** — Influence + Creativity + Threat index
+
+### 8.3 Trend Analysis (Linear Regression)
+
+Untuk setiap metrik, dilakukan linear regression sederhana terhadap urutan musim:
+
+```
+slope = trend direction (naik/turun)
+trend_score per metrik = berdasarkan slope (0-100)
+```
+
+Gabungan trend score dari semua metrik menjadi skor trend keseluruhan (0-100):
+- **65+** = `IMPROVING` — performa naik signifikan
+- **35-65** = `CONSISTENT` — stabil
+- **< 35** = `DECLINING` — performa menurun
+
+### 8.4 Consistency Score
+
+Menggunakan **Coefficient of Variation (CV)** pada metrik lintas musim:
+```
+CV = standard_deviation / mean
+consistency = (1 - CV) * 100    // semakin rendah CV = semakin konsisten
+```
+
+### 8.5 Integrasi ke Quality Score
+
+Trend score dinormalisasi via percentile rank per posisi, kemudian masuk sebagai komponen skor komposit dengan bobot yang berbeda per posisi (lihat bagian 9).
+
+---
+
+## 9. Pembobotan Per Posisi
+
+Setelah semua komponen dinormalisasi ke 0-1, gabungkan dengan bobot berbeda per posisi:
+
+| Komponen (0-1) | GK | DEF | MID | FWD |
 |---|---|---|---|---|
-| xGI per 90 | 0.05 | 0.15 | 0.32 | 0.38 |
-| Form | 0.20 | 0.18 | 0.18 | 0.18 |
-| Fixture (proyeksi) | 0.20 | 0.20 | 0.18 | 0.16 |
-| Keamanan menit | 0.20 | 0.15 | 0.15 | 0.15 |
-| Value (form/juta) | 0.10 | 0.12 | 0.15 | 0.13 |
-| Defensif (xGC↓ + clean sheet) | 0.25 | 0.20 | — | — |
-| **Total** | **1.00** | **1.00** | **1.00** | **1.00** |
+| xGI per 90 | 5% | 15% | 30% | 35% |
+| Form | 18% | 16% | 15% | 15% |
+| Fixture (proyeksi) | 18% | 18% | 16% | 14% |
+| Keamanan menit | 18% | 13% | 13% | 13% |
+| Value (form/juta) | 8% | 10% | 13% | 11% |
+| Defensif (xGC + CS) | 20% | 15% | — | — |
+| **Trend (historis)** | **13%** | **15%** | **17%** | **16%** |
+| **Total** | **100%** | **~100%** | **~100%** | **~100%** |
 
-Bobot di atas adalah **titik awal** — sesuaikan (tuning) setelah melihat hasil nyata.
-Simpan bobot di file konfigurasi terpisah agar mudah diubah tanpa menyentuh kode.
-
----
-
-## 9. Skor Komposit Akhir
-
-Jumlahkan komponen ternormalisasi × bobot, lalu skala ke 0–100 agar mudah dibaca:
-
-```
-skor_0_1 = Σ (komponen_i * bobot_i)
-skor_akhir = round(skor_0_1 * 100)
-```
-
-Karena semua komponen 0–1 dan bobot berjumlah 1, hasilnya otomatis 0–1 → 0–100.
+Bobot bisa dikustomisasi oleh owner via `/metrics weight <metric> <GK> <DEF> <MID> <FWD>`.
+Konfigurasi disimpan di env `METRICS_WEIGHTS` dan `METRICS_ACTIVE`.
 
 ---
 
-## 10. Ownership — Label, Bukan Bagian Skor
+## 10. Skor Komposit Akhir
 
-Ownership tidak menambah "kualitas" pemain, jadi **jangan** dimasukkan ke skor. Pakai
-sebagai penanda strategi terpisah:
-
-```
-own = parseFloat(selected_by_percent)
-
-label =
-  own < 10  && skor_akhir >= 70 ? "DIFFERENTIAL"   // bagus tapi jarang dimiliki
-  own > 40                        ? "TEMPLATE"       // wajib pertimbangkan
-                                    "REGULAR"
-```
-
-Tambahan insight overperformance (regresi) — bandingkan gol aktual vs xG:
+### Quality Score (0-100)
 
 ```
-selisih = goals_scored - expected_goals
-selisih > 2  → "OVERPERFORMING (waspada regresi turun)"
-selisih < -2 → "UNDERPERFORMING (potensi regresi naik / beli murah)"
+skor_0_1 = sum(komponen_i * bobot_i)
+quality_score = round(skor_0_1 * 100)
 ```
+
+### Differential Score
+
+Ownership tidak menambah "kualitas", tapi digunakan sebagai pengali strategi:
+
+```
+eo_factor = 1 - percentile_rank(ownership)     // inverse: rendah = tinggi
+differential_score = quality_score * (0.6 + 0.4 * eo_factor)
+```
+
+Pemain berkualitas tetap mempertahankan mayoritas skornya, tapi yang ber-EO rendah dapat dorongan.
 
 ---
 
-## 11. Sketsa Implementasi (Node.js)
+## 11. Label Pemain
 
-```javascript
-// --- util normalisasi ---
-const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+### Label Strategi
 
-function percentileRank(value, sortedArr) {
-  // sortedArr = nilai populasi seposisi, urut menaik
-  let count = 0;
-  for (const v of sortedArr) if (v < value) count++;
-  return sortedArr.length > 1 ? count / (sortedArr.length - 1) : 0;
-}
+```
+ownership < 10% DAN quality_score >= top 40% seposisi  -> "DIFFERENTIAL"
+ownership > 40%                                         -> "TEMPLATE"
+lainnya                                                 -> "REGULAR"
+```
 
-function minMax(x, lo, hi, invert = false) {
-  if (hi === lo) return 0;
-  const n = (clamp(x, lo, hi) - lo) / (hi - lo);
-  return invert ? 1 - n : n;
-}
+### Label Regresi xG
 
-// --- komponen per pemain ---
-function per90(stat, minutes) {
-  return minutes > 0 ? (stat / minutes) * 90 : 0;
-}
+Bandingkan gol aktual vs xG:
 
-function shrink(nilaiPemain, minutes, rataPosisi) {
-  const w = Math.min(minutes / 450, 1);
-  return w * nilaiPemain + (1 - w) * rataPosisi;
-}
+```
+selisih > 2   -> "OVERPERFORMING" (waspada regresi turun)
+selisih < -2  -> "UNDERPERFORMING" (potensi regresi naik)
+```
 
-function fixtureScore(nextFixtures) {
-  const bobot = [0.40, 0.30, 0.20, 0.10];
-  let s = 0;
-  nextFixtures.slice(0, 4).forEach((f, i) => {
-    let ease = (6 - f.fdr) / 5;
-    ease *= f.isHome ? 1.05 : 0.95;
-    s += ease * (bobot[i] ?? 0);
-  });
-  return clamp(s, 0, 1);
-}
+Dengan data historis 3 musim, ditambah label enhanced:
 
-function minutesSecurity(p) {
-  const pMain = (p.chance_of_playing_next_round ?? 100) / 100;
-  const rasioStart = p.teamGames ? p.starts / p.teamGames : 0;
-  const tersedia = p.status === 'a' ? 1 : p.status === 'd' ? 0.5 : 0;
-  return 0.5 * pMain + 0.3 * rasioStart + 0.2 * tersedia;
-}
+```
+overperform multi-musim -> "CLINICAL_FINISHER" (genuinely good finisher)
+underperform kronis     -> "POOR_FINISHER" (conversion issue persisten)
+```
 
-// --- skor komposit (dipanggil setelah statistik populasi per posisi dihitung) ---
-const BOBOT = {
-  1: { xgi:0.05, form:0.20, fixture:0.20, minutes:0.20, value:0.10, def:0.25 }, // GK
-  2: { xgi:0.15, form:0.18, fixture:0.20, minutes:0.15, value:0.12, def:0.20 }, // DEF
-  3: { xgi:0.32, form:0.18, fixture:0.18, minutes:0.15, value:0.15, def:0.00 }, // MID
-  4: { xgi:0.38, form:0.18, fixture:0.16, minutes:0.15, value:0.13, def:0.00 }, // FWD
-};
+### Label Trend
 
-function hitungSkor(p, pop) {
-  // pop = statistik populasi seposisi (array nilai untuk percentileRank, dsb.)
-  const w = BOBOT[p.element_type];
-
-  const xgi90  = shrink(per90(p.expected_goal_involvements, p.minutes), p.minutes, pop.xgi90Mean);
-  const value  = parseFloat(p.form) / (p.now_cost / 10);
-
-  const n = {
-    xgi:     percentileRank(xgi90, pop.xgi90Sorted),
-    form:    minMax(parseFloat(p.form), pop.formLo, pop.formHi),
-    fixture: fixtureScore(p.nextFixtures),
-    minutes: minutesSecurity(p),
-    value:   percentileRank(value, pop.valueSorted),
-    def:     w.def > 0
-               ? percentileRank(-per90(p.expected_goals_conceded, p.minutes), pop.xgcNegSorted)
-               : 0,
-  };
-
-  const skor01 =
-    w.xgi*n.xgi + w.form*n.form + w.fixture*n.fixture +
-    w.minutes*n.minutes + w.value*n.value + w.def*n.def;
-
-  return { skor: Math.round(skor01 * 100), komponen: n };
-}
+```
+trend_score >= 65 -> "IMPROVING"
+trend_score 35-65 -> "CONSISTENT"
+trend_score < 35  -> "DECLINING"
 ```
 
 ---
 
-## 12. Catatan Tuning & Validasi
+## 12. Transfer Suggestions (/suggest)
 
-- **Verifikasi field API** dulu (nama & satuan) sebelum mengandalkan rumus di atas.
-- **Awal musim (GW < 5):** naikkan bobot `form` & `fixture`, turunkan `xgi` karena data masih tipis; shrinkage sudah membantu tapi bobot juga bisa disesuaikan.
-- **Cache** statistik populasi per posisi per GW — tidak perlu dihitung ulang tiap request.
-- **Validasi** dengan membandingkan ranking skor bot vs poin aktual beberapa GW berikutnya; setel ulang bobot bila perlu.
-- **Pisahkan konfigurasi** (bobot, N fixture, ambang label) ke file terpisah agar mudah di-tune tanpa mengubah logika.
-- Skor ini alat bantu, bukan kebenaran mutlak — selalu tampilkan komponen mentahnya juga agar pengguna bisa menilai sendiri.
+Algoritma untuk merekomendasikan transfer:
+
+1. Ambil squad user via FPL API (picks + transfer history).
+2. Identifikasi 5 pemain terlemah di starting XI berdasarkan quality score.
+3. Untuk setiap pemain lemah, cari pengganti terbaik yang:
+   - Posisi sama
+   - Belum di squad
+   - Masuk budget (selling price + bank)
+   - Pernah main + aman menit
+   - Max 3 pemain per tim
+   - Quality score lebih tinggi
+4. Sort candidates: quality score + bonus trend (IMPROVING +5, DECLINING -5).
+5. Filter: minimal peningkatan 5 poin quality score.
+6. Generate alasan: fixture, form, differential, regresi, trend historis, konsistensi.
+7. Tambahkan berita terkait pemain dari X/Instagram.
+8. Tampilkan top 3 saran transfer.
+
+---
+
+## 13. Catatan Tuning & Validasi
+
+- **Verifikasi field API** saat implementasi — struktur bisa berubah.
+- **Awal musim (GW < 5):** shrinkage membantu, tapi pertimbangkan juga naikkan bobot `form` & `fixture`.
+- **Cache** statistik populasi per posisi — tidak perlu dihitung ulang tiap request (TTL 10 menit).
+- **Validasi** dengan membandingkan ranking skor bot vs poin aktual beberapa GW berikutnya.
+- **Konfigurasi** bobot, ambang label, dan metrik aktif bisa diubah via `/metrics` tanpa edit kode.
+- Data historis di-refresh otomatis weekly dan bisa di-force via `/refreshhistory`.
+- Skor ini alat bantu — selalu tampilkan komponen mentahnya juga agar pengguna bisa menilai sendiri.

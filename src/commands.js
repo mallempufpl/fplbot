@@ -1,4 +1,4 @@
-const { fetchAll, fetchManagerInfo, fetchManagerPicks, fetchMyTeam } = require('./fpl-api');
+const { fetchAll, fetchManagerInfo, fetchManagerPicks, fetchManagerTransfers, fetchMyTeam } = require('./fpl-api');
 const { scoreAllPlayers } = require('./scoring');
 const {
   addToWatchlist, removeFromWatchlist, getWatchlist,
@@ -505,7 +505,10 @@ function registerCommands(bot) {
       const [manager, { scored, teams, currentGw }, transfers] = await Promise.all([
         fetchManagerInfo(managerId),
         getScoredPlayers(),
-        fetchManagerTransfers(managerId),
+        fetchManagerTransfers(managerId).catch(err => {
+          console.warn('Transfers fetch failed (non-fatal):', err.message);
+          return [];
+        }),
       ]);
 
       // Tentukan GW yang sedang ditampilkan
@@ -590,11 +593,11 @@ function registerCommands(bot) {
 
       ctx.replyWithHTML(output);
     } catch (err) {
-      console.error('Error /squad:', err.message);
+      console.error('Error /squad:', err.message, err.stack);
       if (err.response?.status === 404) {
         return ctx.reply(`❌ FPL ID ${managerId} tidak ditemukan. Pastikan ID-nya benar.`);
       }
-      ctx.reply('❌ Gagal mengambil data squad.');
+      ctx.reply(`❌ Gagal mengambil data squad.\n\nError: ${err.message}`);
     }
   });
 
@@ -615,7 +618,10 @@ function registerCommands(bot) {
       const [manager, { scored, teams, currentGw }, transfers] = await Promise.all([
         fetchManagerInfo(managerId),
         getScoredPlayers(),
-        fetchManagerTransfers(managerId),
+        fetchManagerTransfers(managerId).catch(err => {
+          console.warn('Transfers fetch failed (non-fatal):', err.message);
+          return [];
+        }),
       ]);
 
       const { fetchBootstrap } = require('./fpl-api');
@@ -800,11 +806,11 @@ function registerCommands(bot) {
       const header = `<b>👤 ${manager.player_first_name} ${manager.player_last_name}</b> — ${manager.name}\n💰 Bank: £${(bank / 10).toFixed(1)}m\n\n`;
       ctx.replyWithHTML(header + fmt.transferSuggestions(top) + newsSection, { disable_web_page_preview: true });
     } catch (err) {
-      console.error('Error /suggest:', err.message);
+      console.error('Error /suggest:', err.message, err.stack);
       if (err.response?.status === 404) {
         return ctx.reply(`❌ FPL ID ${managerId} tidak ditemukan.`);
       }
-      ctx.reply('❌ Gagal menganalisa squad.');
+      ctx.reply(`❌ Gagal menganalisa squad.\n\nError: ${err.message}`);
     }
   });
 
@@ -1025,6 +1031,11 @@ function registerCommands(bot) {
       lines.push('\n<i>Metrik: xgi, form, fixture, minutes, value, def</i>');
 
       return ctx.replyWithHTML(lines.join('\n'));
+    }
+
+    // Modifikasi metrik hanya untuk owner
+    if (['on', 'off', 'weight', 'reset'].includes(action) && !isOwner(ctx)) {
+      return ctx.reply('🚫 Hanya pemilik bot yang bisa mengubah konfigurasi metrik.');
     }
 
     // /metrics on <metric>
@@ -1254,8 +1265,9 @@ function registerCommands(bot) {
     );
   });
 
-  // /refreshhistory — Force refresh data historis
+  // /refreshhistory — Force refresh data historis (owner only)
   bot.command('refreshhistory', async ctx => {
+    if (!isOwner(ctx)) return ctx.reply('🚫 Hanya pemilik bot.');
     try {
       ctx.reply('⏳ Mengunduh ulang data historis 3 musim...');
       const results = await refreshHistoricalData();
