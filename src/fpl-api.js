@@ -244,6 +244,24 @@ function getFplLoginDebug() {
   return fplLoginDebug;
 }
 
+function setFplSession(token) {
+  if (!token) {
+    fplSession = null;
+    return;
+  }
+  // Auto-detect format: Bearer token or cookie
+  if (token.startsWith('Bearer ')) {
+    fplSession = token;
+  } else if (token.startsWith('ey')) {
+    // JWT token — wrap as Bearer
+    fplSession = `Bearer ${token}`;
+  } else {
+    // Assume cookie value (pl_profile=...)
+    fplSession = token.includes('=') ? token : `pl_profile=${token}`;
+  }
+  fplLoginError = null;
+}
+
 function buildAuthHeaders() {
   if (!fplSession) return null;
   // Support both Bearer token (PingOne) and Cookie (legacy)
@@ -343,5 +361,5 @@ async function fetchAll() {
 module.exports = {
   fetchAll, fetchBootstrap, fetchFixtures, fetchPlayerHistory,
   fetchManagerInfo, fetchManagerPicks, fetchManagerTransfers, clearCache,
-  fetchMyTeam, fplLogin, getFplLoginError, getFplLoginDebug,
+  fetchMyTeam, fplLogin, getFplLoginError, getFplLoginDebug, setFplSession,
 };
