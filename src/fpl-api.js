@@ -49,6 +49,79 @@ function clearCache() {
   cache = { bootstrap: null, fixtures: null, ts: 0 };
 }
 
+// =====================
+// FPL LOGIN & MY-TEAM (live squad sebelum deadline)
+// =====================
+
+let fplSession = null;
+
+async function fplLogin() {
+  const email = process.env.FPL_EMAIL;
+  const password = process.env.FPL_PASSWORD;
+  if (!email || !password) return null;
+
+  try {
+    // Step 1: Login ke FPL
+    const loginResp = await axios.post(
+      'https://users.premierleague.com/accounts/login/',
+      new URLSearchParams({
+        login: email,
+        password: password,
+        redirect_uri: 'https://fantasy.premierleague.com/',
+        app: 'plfpl-web',
+      }).toString(),
+      {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        maxRedirects: 0,
+        validateStatus: s => s >= 200 && s < 400,
+        timeout: 15000,
+      }
+    );
+
+    // Extract cookies dari response
+    const cookies = loginResp.headers['set-cookie'];
+    if (!cookies) return null;
+
+    const cookieStr = cookies.map(c => c.split(';')[0]).join('; ');
+    fplSession = cookieStr;
+    console.log('✅ FPL login berhasil');
+    return cookieStr;
+  } catch (err) {
+    console.error('❌ FPL login gagal:', err.message);
+    return null;
+  }
+}
+
+async function fetchMyTeam(managerId) {
+  if (!fplSession) {
+    await fplLogin();
+  }
+  if (!fplSession) return null;
+
+  try {
+    const { data } = await axios.get(`${BASE}/my-team/${managerId}/`, {
+      headers: { Cookie: fplSession },
+      timeout: 15000,
+    });
+    return data;
+  } catch (err) {
+    // Session expired — coba login ulang sekali
+    if (err.response?.status === 401 || err.response?.status === 403) {
+      fplSession = null;
+      await fplLogin();
+      if (!fplSession) return null;
+      try {
+        const { data } = await axios.get(`${BASE}/my-team/${managerId}/`, {
+          headers: { Cookie: fplSession },
+          timeout: 15000,
+        });
+        return data;
+      } catch { return null; }
+    }
+    return null;
+  }
+}
+
 // Ambil semua data yang dibutuhkan
 async function fetchAll() {
   const [bootstrap, fixtures] = await Promise.all([fetchBootstrap(), fetchFixtures()]);
@@ -107,4 +180,5 @@ async function fetchAll() {
 module.exports = {
   fetchAll, fetchBootstrap, fetchFixtures, fetchPlayerHistory,
   fetchManagerInfo, fetchManagerPicks, fetchManagerTransfers, clearCache,
+  fetchMyTeam, fplLogin,
 };

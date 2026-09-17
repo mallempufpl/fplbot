@@ -37,6 +37,14 @@ function getDb() {
       value TEXT,
       updated_at TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS users (
+      chat_id TEXT PRIMARY KEY,
+      fpl_id INTEGER,
+      username TEXT,
+      first_name TEXT,
+      registered_at TEXT DEFAULT (datetime('now'))
+    );
   `);
 
   return db;
@@ -94,6 +102,25 @@ function isWatched(playerId) {
   return !!getDb().prepare('SELECT 1 FROM watchlist WHERE player_id = ?').get(playerId);
 }
 
+// Users
+function registerUser(chatId, fplId, username, firstName) {
+  getDb().prepare(
+    'INSERT OR REPLACE INTO users (chat_id, fpl_id, username, first_name) VALUES (?, ?, ?, ?)'
+  ).run(String(chatId), fplId, username || null, firstName || null);
+}
+
+function getUser(chatId) {
+  return getDb().prepare('SELECT * FROM users WHERE chat_id = ?').get(String(chatId));
+}
+
+function deleteUser(chatId) {
+  getDb().prepare('DELETE FROM users WHERE chat_id = ?').run(String(chatId));
+}
+
+function getAllUsers() {
+  return getDb().prepare('SELECT * FROM users ORDER BY registered_at').all();
+}
+
 module.exports = {
   getDb,
   saveSnapshot,
@@ -103,4 +130,8 @@ module.exports = {
   removeFromWatchlist,
   getWatchlist,
   isWatched,
+  registerUser,
+  getUser,
+  deleteUser,
+  getAllUsers,
 };

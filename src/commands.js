@@ -1,6 +1,6 @@
-const { fetchAll, fetchManagerInfo, fetchManagerPicks } = require('./fpl-api');
+const { fetchAll, fetchManagerInfo, fetchManagerPicks, fetchMyTeam } = require('./fpl-api');
 const { scoreAllPlayers } = require('./scoring');
-const { addToWatchlist, removeFromWatchlist, getWatchlist } = require('./database');
+const { addToWatchlist, removeFromWatchlist, getWatchlist, registerUser, getUser, getAllUsers } = require('./database');
 const {
   POSITION_NAMES, POSITION_EMOJI, ALL_METRICS, METRIC_LABELS,
   getActiveMetrics, getPositionWeights, DEFAULT_WEIGHTS,
@@ -64,14 +64,126 @@ function posIdFromStr(str) {
   return alias[s] || null;
 }
 
+// Perintah yang bisa diakses tanpa registrasi
+const PUBLIC_COMMANDS = ['start', 'myid'];
+
+function isOwner(ctx) {
+  const chatId = process.env.CHAT_ID;
+  if (!chatId) return true;
+  return String(ctx.from.id) === String(chatId);
+}
+
+// Ambil FPL ID user: dari registered user atau fallback ke env (owner)
+function getUserFplId(ctx) {
+  const user = getUser(ctx.from.id);
+  if (user?.fpl_id) return user.fpl_id;
+  // Fallback untuk owner
+  if (isOwner(ctx) && process.env.FPL_ID) return parseInt(process.env.FPL_ID);
+  return null;
+}
+
 function registerCommands(bot) {
 
-  // /start
-  bot.command('start', ctx => {
+  // =====================
+  // MIDDLEWARE: Cek registrasi sebelum akses fitur
+  // =====================
+  bot.use((ctx, next) => {
+    // Hanya proses pesan text / command
+    if (!ctx.message?.text) return next();
+
+    const text = ctx.message.text;
+    const command = text.startsWith('/') ? text.split(/[\s@]/)[0].substring(1).toLowerCase() : null;
+
+    // Public commands & admin commands selalu diizinkan
+    if (!command || PUBLIC_COMMANDS.includes(command)) return next();
+
+    // Owner selalu bisa akses
+    if (isOwner(ctx)) return next();
+
+    // Cek registrasi
+    const user = getUser(ctx.from.id);
+    if (!user) {
+      return ctx.replyWithHTML(
+        `👋 <b>Halo ${ctx.from.first_name || 'Sobat FPL'}!</b>\n\n` +
+        `Sebelum menggunakan bot ini, kamu perlu mendaftarkan FPL ID kamu dulu.\n\n` +
+        `Ketik /start untuk mulai registrasi.`
+      );
+    }
+
+    return next();
+  });
+
+  // =====================
+  // /start — Welcome & Registrasi
+  // =====================
+  bot.command('start', async ctx => {
+    const user = getUser(ctx.from.id);
+
+    // User belum terdaftar → tampilkan welcome + minta FPL ID
+    if (!user && !isOwner(ctx)) {
+      return ctx.replyWithHTML([
+        `👋 <b>Selamat Datang di FPL Differential Bot!</b>`,
+        ``,
+        `Halo <b>${ctx.from.first_name || 'Sobat FPL'}</b>! Bot ini akan membantu kamu:`,
+        ``,
+        `⚽ Analisa pemain dengan metrik canggih + data 3 musim`,
+        `📊 Rekomendasi transfer berdasarkan quality score`,
+        `💎 Temukan differential picks tersembunyi`,
+        `📰 Update berita FPL dari X & Instagram`,
+        `📈 Tren transfer in/out terpopuler`,
+        ``,
+        `<b>Untuk mulai, daftarkan FPL ID kamu:</b>`,
+        `<code>/start [FPL ID]</code>`,
+        ``,
+        `<b>Contoh:</b> <code>/start 1234567</code>`,
+        ``,
+        `<b>Cara cari FPL ID:</b>`,
+        `1. Buka fantasy.premierleague.com`,
+        `2. Login → klik "Points" atau "My Team"`,
+        `3. Lihat angka di URL: /entry/<b>XXXXX</b>/event/...`,
+        ``,
+        `💡 FPL ID bukan username, tapi angka di URL halaman tim kamu.`,
+      ].join('\n'));
+    }
+
+    // Cek apakah ada FPL ID di argumen (registrasi atau update)
+    const arg = ctx.message.text.replace(/^\/start\s*/i, '').trim();
+    if (arg) {
+      const fplId = parseInt(arg);
+      if (!fplId || isNaN(fplId)) {
+        return ctx.reply('❌ FPL ID harus berupa angka. Contoh: /start 1234567');
+      }
+
+      // Validasi FPL ID
+      try {
+        const manager = await fetchManagerInfo(fplId);
+        registerUser(ctx.from.id, fplId, ctx.from.username, ctx.from.first_name);
+
+        return ctx.replyWithHTML([
+          `✅ <b>Registrasi Berhasil!</b>`,
+          ``,
+          `👤 <b>${manager.player_first_name} ${manager.player_last_name}</b>`,
+          `📋 ${manager.name}`,
+          `🏆 Overall Rank: ${manager.summary_overall_rank?.toLocaleString() || 'N/A'}`,
+          `📊 Total Points: ${manager.summary_overall_points || 0}`,
+          ``,
+          `FPL ID kamu (<code>${fplId}</code>) sudah tersimpan.`,
+          `Sekarang kamu bisa menggunakan semua fitur bot!`,
+          ``,
+          `Ketik /start lagi untuk melihat daftar perintah.`,
+        ].join('\n'));
+      } catch (err) {
+        if (err.response?.status === 404) {
+          return ctx.reply(`❌ FPL ID ${fplId} tidak ditemukan. Pastikan ID-nya benar.`);
+        }
+        return ctx.reply('❌ Gagal memverifikasi FPL ID. Coba lagi nanti.');
+      }
+    }
+
+    // User sudah terdaftar atau owner → tampilkan menu
+    const userInfo = user ? ` (FPL ID: <code>${user.fpl_id}</code>)` : '';
     ctx.replyWithHTML([
-      '<b>⚽ FPL Differential Bot</b>',
-      '',
-      'Bot analisa pemain FPL dengan fokus differential pick.',
+      `<b>⚽ FPL Differential Bot</b>${userInfo}`,
       '',
       '<b>📊 Analisa Pemain:</b>',
       '/player &lt;nama&gt; — Detail pemain',
@@ -83,46 +195,32 @@ function registerCommands(bot) {
       '/regression — Pemain over/underperform vs xG',
       '',
       '<b>👤 Squad & Transfer:</b>',
-      '/squad &lt;FPL ID&gt; — Lihat squad lengkap',
-      '/suggest &lt;FPL ID&gt; — Saran transfer terbaik',
+      '/squad — Lihat squad kamu',
+      '/suggest — Saran transfer terbaik',
       '/trending — Transfer in &amp; out terpopuler',
-      '/trending in — Hanya transfer in',
-      '/trending out — Hanya transfer out',
       '/nettransfer — Net transfer (gainers vs losers)',
       '',
-      '<b>📰 Info & Berita:</b>',
-      '/news — Semua berita (X + IG)',
-      '/news x — Semua berita dari X',
-      '/news ig — Semua berita dari Instagram',
-      '/news x &lt;username&gt; — Berita akun X tertentu',
-      '/news ig &lt;username&gt; — Berita akun IG tertentu',
+      '<b>📰 Berita & Info:</b>',
+      '/news — Berita FPL (X + IG)',
       '/newslist — Daftar akun sumber berita',
       '/fixtures &lt;tim&gt; — Jadwal & FDR',
-      '',
-      '<i>Contoh: /news x OfficialFPL</i>',
-      '<i>Contoh: /news ig premierleague</i>',
-      '<i>Username tanpa @, cukup nama akunnya saja</i>',
       '',
       '<b>📋 Watchlist:</b>',
       '/watch &lt;nama&gt; — Tambah ke watchlist',
       '/unwatch &lt;nama&gt; — Hapus dari watchlist',
       '/watchlist — Lihat watchlist',
       '',
-      '<b>⚙️ Metrik & Config:</b>',
-      '/metrics — Lihat konfigurasi metrik scoring',
-      '/metrics on &lt;metric&gt; — Aktifkan metrik',
-      '/metrics off &lt;metric&gt; — Nonaktifkan metrik',
-      '/metrics weight &lt;metric&gt; GK DEF MID FWD',
-      '/metrics reset — Reset ke default',
-      '',
-      '<b>⚙️ Admin:</b>',
-      '/setenv &lt;KEY&gt; &lt;VALUE&gt; — Update config',
-      '/getenv — Lihat config saat ini',
-      '/delenv &lt;KEY&gt; — Hapus config',
-      '/restart — Restart bot',
-      '/myid — Lihat Chat ID kamu',
-      '/refresh — Refresh data dari API',
-      '/refreshhistory — Refresh data historis 3 musim',
+      '<b>⚙️ Pengaturan:</b>',
+      '/start &lt;FPL ID&gt; — Ubah FPL ID',
+      '/metrics — Konfigurasi metrik scoring',
+      '/refresh — Refresh data',
+      ...(isOwner(ctx) ? [
+        '',
+        '<b>🔒 Admin:</b>',
+        '/setenv · /getenv · /delenv · /restart',
+        '/refreshhistory — Refresh data historis',
+        '/users — Daftar user terdaftar',
+      ] : []),
     ].join('\n'));
   });
 
@@ -383,15 +481,12 @@ function registerCommands(bot) {
   // /squad [FPL ID]
   bot.command('squad', async ctx => {
     const input = ctx.message.text.replace(/^\/squad\s*/i, '').trim();
-    const managerId = parseInt(input) || parseInt(process.env.FPL_ID);
+    const managerId = parseInt(input) || getUserFplId(ctx);
     if (!managerId || isNaN(managerId)) {
       return ctx.replyWithHTML(
-        'Gunakan: /squad &lt;FPL ID&gt;\n\n' +
-        'Atau set default: <code>/setenv FPL_ID 1234567</code>\n\n' +
-        '<b>Cara cari FPL ID:</b>\n' +
-        '1. Buka fantasy.premierleague.com\n' +
-        '2. Klik "My Team" atau "Points"\n' +
-        '3. Lihat angka di URL: /entry/<b>XXXXX</b>/event/...'
+        'FPL ID belum terdaftar.\n\n' +
+        'Gunakan <code>/start [FPL ID]</code> untuk mendaftar.\n' +
+        'Atau: <code>/squad [FPL ID]</code> untuk cek squad orang lain.'
       );
     }
 
@@ -411,18 +506,37 @@ function registerCommands(bot) {
       let picks;
       let displayGw = currentGw;
       let isProjected = false;
+      let isLive = false;
 
-      // 1. Coba ambil picks GW berikutnya (tersedia setelah deadline)
-      if (nextGw > currentGw) {
+      // 1. Coba ambil live squad via my-team (jika ini FPL ID milik owner)
+      const ownerFplId = parseInt(process.env.FPL_ID);
+      if (managerId === ownerFplId && process.env.FPL_EMAIL) {
+        try {
+          const myTeam = await fetchMyTeam(managerId);
+          if (myTeam?.picks) {
+            picks = {
+              picks: myTeam.picks,
+              entry_history: null, // my-team tidak punya entry_history
+            };
+            displayGw = nextGw;
+            isLive = true;
+          }
+        } catch (err) {
+          console.error('my-team fallback:', err.message);
+        }
+      }
+
+      // 2. Coba ambil picks GW berikutnya (tersedia setelah deadline)
+      if (!picks && nextGw > currentGw) {
         try {
           picks = await fetchManagerPicks(managerId, nextGw);
           displayGw = nextGw;
         } catch {
-          // GW berikutnya belum tersedia — gunakan GW terakhir
+          // GW berikutnya belum tersedia
         }
       }
 
-      // 2. Fallback ke GW terakhir yang tersedia
+      // 3. Fallback ke GW terakhir yang tersedia
       if (!picks) {
         try {
           picks = await fetchManagerPicks(managerId, currentGw);
@@ -437,30 +551,34 @@ function registerCommands(bot) {
         }
       }
 
-      // 3. Terapkan transfer pending (untuk GW berikutnya) di atas picks terakhir
-      const pendingTransfers = transfers.filter(t => t.event > displayGw);
-      if (pendingTransfers.length > 0 && picks) {
-        isProjected = true;
-        const updatedPicks = [...picks.picks];
-        for (const tr of pendingTransfers) {
-          const idx = updatedPicks.findIndex(pk => pk.element === tr.element_out);
-          if (idx !== -1) {
-            updatedPicks[idx] = { ...updatedPicks[idx], element: tr.element_in };
+      // 4. Terapkan transfer pending (jika bukan live data)
+      if (!isLive) {
+        const pendingTransfers = transfers.filter(t => t.event > displayGw);
+        if (pendingTransfers.length > 0 && picks) {
+          isProjected = true;
+          const updatedPicks = [...picks.picks];
+          for (const tr of pendingTransfers) {
+            const idx = updatedPicks.findIndex(pk => pk.element === tr.element_out);
+            if (idx !== -1) {
+              updatedPicks[idx] = { ...updatedPicks[idx], element: tr.element_in };
+            }
           }
+          picks = { ...picks, picks: updatedPicks };
+          displayGw = nextGw;
         }
-        picks = { ...picks, picks: updatedPicks };
-        displayGw = nextGw;
       }
 
       let output = fmt.squadCard(manager, picks, scored, teams, displayGw);
 
       // Tambah info status data
-      if (isProjected) {
-        output += `\n\n📌 <i>Squad diproyeksikan dari GW${currentGw} + ${pendingTransfers.length} transfer pending.`;
-        output += `\nPerubahan lineup (bench/kapten) akan terlihat setelah deadline GW${nextGw}.</i>`;
+      if (isLive) {
+        output += `\n\n✅ <i>Data live — termasuk perubahan lineup & kapten terbaru.</i>`;
+      } else if (isProjected) {
+        output += `\n\n📌 <i>Squad diproyeksikan dari GW${currentGw} + transfer pending.`;
+        output += `\nPerubahan lineup (bench/kapten) belum terlihat.</i>`;
       } else if (nextGw > displayGw) {
         output += `\n\n📌 <i>Menampilkan squad GW${displayGw} (terakhir dikonfirmasi).`;
-        output += `\nPerubahan lineup & transfer untuk GW${nextGw} akan terlihat setelah deadline.</i>`;
+        output += `\nPerubahan untuk GW${nextGw} terlihat setelah deadline.</i>`;
       }
 
       ctx.replyWithHTML(output);
@@ -476,12 +594,12 @@ function registerCommands(bot) {
   // /suggest [FPL ID]
   bot.command('suggest', async ctx => {
     const input = ctx.message.text.replace(/^\/suggest\s*/i, '').trim();
-    const managerId = parseInt(input) || parseInt(process.env.FPL_ID);
+    const managerId = parseInt(input) || getUserFplId(ctx);
     if (!managerId || isNaN(managerId)) {
       return ctx.replyWithHTML(
-        'Gunakan: /suggest &lt;FPL ID&gt;\n\n' +
-        'Atau set default: <code>/setenv FPL_ID 1234567</code>\n\n' +
-        'Bot akan analisa squad kamu dan sarankan transfer terbaik.'
+        'FPL ID belum terdaftar.\n\n' +
+        'Gunakan <code>/start [FPL ID]</code> untuk mendaftar.\n' +
+        'Atau: <code>/suggest [FPL ID]</code>'
       );
     }
 
@@ -927,6 +1045,24 @@ function registerCommands(bot) {
       console.error('Error /history:', err.message);
       ctx.reply('❌ Gagal mengambil data historis.');
     }
+  });
+
+  // /users — Daftar user terdaftar (admin only)
+  bot.command('users', ctx => {
+    if (!isOwner(ctx)) return ctx.reply('🚫 Hanya admin.');
+
+    const users = getAllUsers();
+    if (users.length === 0) return ctx.reply('📋 Belum ada user terdaftar.');
+
+    const lines = [`<b>👥 User Terdaftar (${users.length})</b>\n`];
+    users.forEach((u, i) => {
+      lines.push(
+        `${i + 1}. <b>${u.first_name || 'Unknown'}</b>` +
+        `${u.username ? ' (@' + u.username + ')' : ''}` +
+        ` — FPL ID: <code>${u.fpl_id}</code>`
+      );
+    });
+    ctx.replyWithHTML(lines.join('\n'));
   });
 
   // /refreshhistory — Force refresh data historis

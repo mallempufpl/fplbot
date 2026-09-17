@@ -9,10 +9,11 @@ const ALLOWED_KEYS = [
   'EMAIL', 'IG_SESSION_ID', 'ADMIN_SECRET',
   'X_ACCOUNTS', 'IG_ACCOUNTS',
   'METRICS_ACTIVE', 'METRICS_WEIGHTS',
+  'FPL_EMAIL', 'FPL_PASSWORD',
 ];
 
 // Key yang nilainya di-mask saat ditampilkan
-const SENSITIVE_KEYS = ['BOT_TOKEN', 'ADMIN_SECRET', 'IG_SESSION_ID'];
+const SENSITIVE_KEYS = ['BOT_TOKEN', 'ADMIN_SECRET', 'IG_SESSION_ID', 'FPL_PASSWORD'];
 
 function isOwner(ctx) {
   const chatId = process.env.CHAT_ID;
