@@ -602,9 +602,83 @@ function historyCard(p, trend) {
   return lines.join('\n');
 }
 
+function bestXICard(manager, result, currentGw) {
+  const lines = [
+    `<b>⭐ Best Starting XI — GW${currentGw}</b>`,
+    `<b>👤 ${manager.player_first_name} ${manager.player_last_name}</b> | ${manager.name}`,
+    ``,
+    `<b>📐 Formasi: ${result.formation}</b>`,
+    `<b>📊 Total Quality Score: ${result.totalScore}</b>`,
+    ``,
+    `<b>⚽ Starting XI</b>`,
+  ];
+
+  // Group starting XI by position
+  const posGroups = { 1: [], 2: [], 3: [], 4: [] };
+  for (const p of result.starting) {
+    posGroups[p.element_type].push(p);
+  }
+
+  for (const pos of [1, 2, 3, 4]) {
+    const group = posGroups[pos];
+    if (group.length === 0) continue;
+    for (const p of group) {
+      const badge = p.isCaptain ? ' ©️' : p.isViceCaptain ? ' (VC)' : '';
+      const statusIcon = p.status !== 'a' ? ` ${p.status === 'd' ? '⚠️' : '🏥'}` : '';
+      const fixtureStr = p.nextFixtures?.[0]
+        ? ` vs ${p.nextFixtures[0].opponent_name}(${p.nextFixtures[0].isHome ? 'H' : 'A'})`
+        : '';
+      lines.push(
+        `  ${posLabel(pos)} <b>${p.web_name}</b>${badge}${statusIcon} — ` +
+        `${colorIcon(p.scoring.qualityScore)}Q:${p.scoring.qualityScore} | ` +
+        `F:${p.form} | ${priceStr(p.now_cost)}${fixtureStr}`
+      );
+    }
+  }
+
+  // Bench
+  lines.push('');
+  lines.push('<b>🪑 Bench (urut prioritas)</b>');
+  for (let i = 0; i < result.bench.length; i++) {
+    const p = result.bench[i];
+    const statusIcon = p.status !== 'a' ? ` ${p.status === 'd' ? '⚠️' : '🏥'}` : '';
+    lines.push(
+      `  ${i + 1}. ${posLabel(p.element_type)} ${p.web_name}${statusIcon} — ` +
+      `${colorIcon(p.scoring.qualityScore)}Q:${p.scoring.qualityScore} | F:${p.form}`
+    );
+  }
+
+  // Captain reasoning
+  lines.push('');
+  lines.push('<b>👑 Rekomendasi Kapten</b>');
+  const cap = result.starting.find(p => p.isCaptain);
+  const vc = result.starting.find(p => p.isViceCaptain);
+  if (cap) {
+    const capFixture = cap.nextFixtures?.[0];
+    lines.push(
+      `  ©️ <b>${cap.web_name}</b> — Q:${cap.scoring.qualityScore} | F:${cap.form}` +
+      (capFixture ? ` | vs ${capFixture.opponent_name}(${capFixture.isHome ? 'H' : 'A'}) FDR:${capFixture.fdr}` : '')
+    );
+  }
+  if (vc) {
+    lines.push(`  VC: ${vc.web_name} — Q:${vc.scoring.qualityScore} | F:${vc.form}`);
+  }
+
+  // Comparison with current lineup if different
+  if (result.changes?.length > 0) {
+    lines.push('');
+    lines.push('<b>🔄 Perubahan dari lineup saat ini:</b>');
+    for (const ch of result.changes) {
+      lines.push(`  ➡️ ${ch}`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
 module.exports = {
   playerCard, compareCard, rankingList, fixtureTable,
   priceChangeNotif, statusChangeNotif, squadCard, transferSuggestions,
   trendingCard, trendingOutCard, netTransferCard,
-  analyzeCard, historyCard, posLabel, priceStr,
+  analyzeCard, historyCard, bestXICard, posLabel, priceStr,
 };

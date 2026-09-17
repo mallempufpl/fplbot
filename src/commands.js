@@ -203,6 +203,7 @@ function registerCommands(bot) {
       '',
       '<b>👤 Squad & Transfer:</b>',
       '/squad — Lihat squad kamu',
+      '/bestxi — Starting XI terbaik dari squad kamu',
       '/suggest — Saran transfer terbaik',
       '/trending — Transfer in &amp; out terpopuler',
       '/nettransfer — Net transfer (gainers vs losers)',
@@ -600,6 +601,186 @@ function registerCommands(bot) {
         return ctx.reply(`❌ FPL ID ${managerId} tidak ditemukan. Pastikan ID-nya benar.`);
       }
       ctx.reply(`❌ Gagal mengambil data squad.\n\nError: ${err.message}`);
+    }
+  });
+
+  // /bestxi [FPL ID]
+  bot.command('bestxi', async ctx => {
+    const input = ctx.message.text.replace(/^\/bestxi\s*/i, '').trim();
+    const managerId = parseInt(input) || getUserFplId(ctx);
+    if (!managerId || isNaN(managerId)) {
+      return ctx.replyWithHTML(
+        'FPL ID belum terdaftar.\n\n' +
+        'Gunakan <code>/start [FPL ID]</code> untuk mendaftar.\n' +
+        'Atau: <code>/bestxi [FPL ID]</code>'
+      );
+    }
+
+    try {
+      ctx.reply('⏳ Menghitung Best Starting XI...');
+      const [manager, { scored, teams, currentGw }] = await Promise.all([
+        fetchManagerInfo(managerId),
+        getScoredPlayers(),
+      ]);
+
+      const bootstrap = await fetchBootstrap();
+      const nextGw = bootstrap.events.find(e => e.is_next)?.id || currentGw;
+
+      // Get current picks
+      let picks;
+      let displayGw = currentGw;
+
+      const ownerFplId = parseInt(process.env.FPL_ID);
+      if (managerId === ownerFplId && process.env.FPL_EMAIL) {
+        try {
+          const myTeam = await fetchMyTeam(managerId);
+          if (myTeam?.picks) {
+            picks = { picks: myTeam.picks };
+            displayGw = nextGw;
+          }
+        } catch {}
+      }
+
+      if (!picks) {
+        const gwsToTry = [];
+        if (nextGw > currentGw) gwsToTry.push(nextGw);
+        gwsToTry.push(currentGw);
+        for (let gw = currentGw - 1; gw >= Math.max(1, currentGw - 3); gw--) {
+          gwsToTry.push(gw);
+        }
+        for (const gw of gwsToTry) {
+          if (picks) break;
+          try {
+            picks = await fetchManagerPicks(managerId, gw);
+            displayGw = gw;
+          } catch {}
+        }
+      }
+
+      if (!picks) {
+        return ctx.reply('❌ Belum ada data squad.');
+      }
+
+      // Get squad players with scores
+      const squadPlayers = picks.picks.map(pick => {
+        const p = scored.find(sp => sp.id === pick.element);
+        if (!p) return null;
+        return { ...p, currentPosition: pick.position };
+      }).filter(Boolean);
+
+      if (squadPlayers.length < 15) {
+        return ctx.reply('❌ Squad tidak lengkap — tidak bisa menghitung Best XI.');
+      }
+
+      // Valid formations: [DEF, MID, FWD]
+      const FORMATIONS = [
+        [3, 4, 3], [3, 5, 2],
+        [4, 3, 3], [4, 4, 2], [4, 5, 1],
+        [5, 3, 2], [5, 4, 1],
+      ];
+
+      // Group by position
+      const byPos = { 1: [], 2: [], 3: [], 4: [] };
+      for (const p of squadPlayers) {
+        byPos[p.element_type].push(p);
+      }
+      // Sort each position group by quality score descending
+      for (const pos of [1, 2, 3, 4]) {
+        byPos[pos].sort((a, b) => b.scoring.qualityScore - a.scoring.qualityScore);
+      }
+
+      // Find best formation
+      let bestFormation = null;
+      let bestScore = -1;
+      let bestStarting = null;
+
+      for (const [nDef, nMid, nFwd] of FORMATIONS) {
+        if (byPos[2].length < nDef || byPos[3].length < nMid || byPos[4].length < nFwd) continue;
+
+        const gk = byPos[1][0]; // Best GK
+        const defs = byPos[2].slice(0, nDef);
+        const mids = byPos[3].slice(0, nMid);
+        const fwds = byPos[4].slice(0, nFwd);
+
+        const starting = [gk, ...defs, ...mids, ...fwds];
+
+        // Penalize unavailable players
+        const totalScore = starting.reduce((sum, p) => {
+          let qs = p.scoring.qualityScore;
+          if (p.status === 'i' || p.status === 'u' || p.status === 's') qs *= 0.1;
+          else if (p.status === 'd') qs *= 0.7;
+          return sum + qs;
+        }, 0);
+
+        if (totalScore > bestScore) {
+          bestScore = totalScore;
+          bestFormation = `${nDef}-${nMid}-${nFwd}`;
+          bestStarting = starting;
+        }
+      }
+
+      if (!bestStarting) {
+        return ctx.reply('❌ Tidak bisa menemukan formasi valid.');
+      }
+
+      // Determine bench (players not in starting XI)
+      const startingIds = new Set(bestStarting.map(p => p.id));
+      const bench = squadPlayers
+        .filter(p => !startingIds.has(p.id))
+        .sort((a, b) => {
+          // GK bench goes last
+          if (a.element_type === 1 && b.element_type !== 1) return 1;
+          if (a.element_type !== 1 && b.element_type === 1) return -1;
+          return b.scoring.qualityScore - a.scoring.qualityScore;
+        });
+
+      // Captain = highest quality score in starting XI (prefer attackers for tiebreak)
+      const captainCandidates = [...bestStarting]
+        .sort((a, b) => {
+          const aDiff = b.scoring.qualityScore - a.scoring.qualityScore;
+          if (aDiff !== 0) return aDiff;
+          return b.element_type - a.element_type; // prefer FWD > MID > DEF
+        });
+      captainCandidates[0].isCaptain = true;
+      captainCandidates[1].isViceCaptain = true;
+
+      // Detect changes from current lineup
+      const currentStartingIds = new Set(
+        picks.picks.filter(pk => pk.position <= 11).map(pk => pk.element)
+      );
+      const changes = [];
+      for (const p of bestStarting) {
+        if (!currentStartingIds.has(p.id)) {
+          changes.push(`${p.web_name} masuk Starting XI`);
+        }
+      }
+      for (const p of bench) {
+        if (currentStartingIds.has(p.id)) {
+          changes.push(`${p.web_name} ke Bench`);
+        }
+      }
+      // Captain change
+      const currentCaptain = picks.picks.find(pk => pk.is_captain);
+      if (currentCaptain && currentCaptain.element !== captainCandidates[0].id) {
+        const oldCap = scored.find(sp => sp.id === currentCaptain.element);
+        changes.push(`Kapten: ${oldCap?.web_name || '?'} → ${captainCandidates[0].web_name}`);
+      }
+
+      const result = {
+        formation: bestFormation,
+        totalScore: Math.round(bestScore),
+        starting: bestStarting,
+        bench,
+        changes: changes.length > 0 ? changes : null,
+      };
+
+      ctx.replyWithHTML(fmt.bestXICard(manager, result, displayGw));
+    } catch (err) {
+      console.error('Error /bestxi:', err.message, err.stack);
+      if (err.response?.status === 404) {
+        return ctx.reply(`❌ FPL ID ${managerId} tidak ditemukan.`);
+      }
+      ctx.reply(`❌ Gagal menghitung Best XI.\n\nError: ${err.message}`);
     }
   });
 
