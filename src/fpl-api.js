@@ -59,6 +59,7 @@ async function fetchFixtures() {
 
   const { data } = await fplClient.get(`${BASE}/fixtures/`);
   cache.fixtures = data;
+  cache.ts = now;
   return data;
 }
 

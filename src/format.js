@@ -20,7 +20,7 @@ function colorIcon(value, thresholds = [70, 40]) {
 }
 
 function bar(value, max = 1, len = 10) {
-  const filled = Math.round((value / max) * len);
+  const filled = Math.min(Math.max(Math.round((value / max) * len), 0), len);
   return '█'.repeat(filled) + '░'.repeat(len - filled);
 }
 
@@ -31,7 +31,7 @@ function playerCard(p) {
   ).join(', ');
 
   const lines = [
-    `<b>${p.web_name}</b> — ${posLabel(p.element_type)}`,
+    `<b>${escapeHtml(p.web_name)}</b> — ${posLabel(p.element_type)}`,
     `${p.teamData?.name || 'Unknown'} | ${priceStr(p.now_cost)} | EO: ${p.selected_by_percent}%`,
     ``,
     `📊 <b>Quality Score: ${s.qualityScore}/100</b>`,
@@ -79,7 +79,7 @@ function compareCard(a, b) {
   const better = (va, vb) => va > vb ? '✅' : va < vb ? '❌' : '➖';
 
   return [
-    `<b>${a.web_name}</b> vs <b>${b.web_name}</b>`,
+    `<b>${escapeHtml(a.web_name)}</b> vs <b>${escapeHtml(b.web_name)}</b>`,
     `${posLabel(a.element_type)} | ${posLabel(b.element_type)}`,
     ``,
     `<pre>`,
@@ -94,7 +94,7 @@ function compareCard(a, b) {
     `Minutes        ${String(a.minutes).padEnd(12)} ${b.minutes}`,
     `</pre>`,
     ``,
-    `🏷 ${a.web_name}: ${sa.label} | ${b.web_name}: ${sb.label}`,
+    `🏷 ${escapeHtml(a.web_name)}: ${sa.label} | ${escapeHtml(b.web_name)}: ${sb.label}`,
   ].join('\n');
 }
 
@@ -104,7 +104,7 @@ function rankingList(players, title, limit = 10) {
     const s = p.scoring;
     const medal = i < 3 ? ['🥇', '🥈', '🥉'][i] : `${i + 1}.`;
     lines.push(
-      `${medal} <b>${p.web_name}</b> (${p.teamData?.short_name || '?'}) — ` +
+      `${medal} <b>${escapeHtml(p.web_name)}</b> (${p.teamData?.short_name || '?'}) — ` +
       `Q:${s.qualityScore} D:${s.differentialScore} | ` +
       `${priceStr(p.now_cost)} | EO:${p.selected_by_percent}% | ${s.label}`
     );
@@ -131,7 +131,7 @@ function priceChangeNotif(changes) {
   const lines = ['<b>💰 Perubahan Harga</b>\n'];
   for (const c of changes) {
     const arrow = c.diff > 0 ? '📈' : '📉';
-    lines.push(`${arrow} <b>${c.name}</b>: ${priceStr(c.oldPrice)} → ${priceStr(c.newPrice)} (${c.diff > 0 ? '+' : ''}${priceStr(c.diff)})`);
+    lines.push(`${arrow} <b>${escapeHtml(c.name)}</b>: ${priceStr(c.oldPrice)} → ${priceStr(c.newPrice)} (${c.diff > 0 ? '+' : ''}${priceStr(c.diff)})`);
   }
   return lines.join('\n');
 }
@@ -143,7 +143,7 @@ function statusChangeNotif(changes) {
   const lines = ['<b>🏥 Perubahan Status Pemain</b>\n'];
   for (const c of changes) {
     lines.push(
-      `${statusEmoji[c.newStatus] || '❓'} <b>${c.name}</b>: ` +
+      `${statusEmoji[c.newStatus] || '❓'} <b>${escapeHtml(c.name)}</b>: ` +
       `${statusLabel[c.oldStatus] || c.oldStatus} → ${statusLabel[c.newStatus] || c.newStatus}` +
       (c.chance != null ? ` (${c.chance}% chance)` : '')
     );
@@ -197,7 +197,7 @@ function squadCard(manager, picks, scoredPlayers, teams, currentGw) {
       const badge = p.isCaptain ? ' ©️' : p.isViceCaptain ? ' (VC)' : '';
       const statusIcon = p.status !== 'a' ? ` ${p.status === 'd' ? '⚠️' : '🏥'}` : '';
       lines.push(
-        `  ${posLabel(pos)} <b>${p.web_name}</b>${badge}${statusIcon} — ` +
+        `  ${posLabel(pos)} <b>${escapeHtml(p.web_name)}</b>${badge}${statusIcon} — ` +
         `${colorIcon(p.scoring.qualityScore)}Q:${p.scoring.qualityScore} | ${priceStr(p.now_cost)} | ${colorIcon(parseFloat(p.form), [6, 3])}F:${p.form}`
       );
     }
@@ -216,7 +216,7 @@ function squadCard(manager, picks, scoredPlayers, teams, currentGw) {
       continue;
     }
     lines.push(
-      `  ${posLabel(p.element_type)} ${p.web_name} — ${colorIcon(p.scoring.qualityScore)}Q:${p.scoring.qualityScore} | ${priceStr(p.now_cost)}`
+      `  ${posLabel(p.element_type)} ${escapeHtml(p.web_name)} — ${colorIcon(p.scoring.qualityScore)}Q:${p.scoring.qualityScore} | ${priceStr(p.now_cost)}`
     );
   }
 
@@ -247,8 +247,8 @@ function transferSuggestions(suggestions) {
 
     lines.push(
       `${priority} <b>Prioritas ${i + 1}</b>`,
-      `  ❌ OUT: <b>${s.out.web_name}</b> (${s.out.teamShort}) — Q:${s.out.qualityScore} | ${priceStr(s.out.nowCost)}${trendBadge(s.out)}`,
-      `  ✅ IN:  <b>${s.in.web_name}</b> (${s.in.teamShort}) — Q:${s.in.qualityScore} | ${priceStr(s.in.nowCost)}${trendBadge(s.in)}`,
+      `  ❌ OUT: <b>${escapeHtml(s.out.web_name)}</b> (${s.out.teamShort}) — Q:${s.out.qualityScore} | ${priceStr(s.out.nowCost)}${trendBadge(s.out)}`,
+      `  ✅ IN:  <b>${escapeHtml(s.in.web_name)}</b> (${s.in.teamShort}) — Q:${s.in.qualityScore} | ${priceStr(s.in.nowCost)}${trendBadge(s.in)}`,
       `  📈 Skor naik: +${s.scoreDiff} | 💰 ${s.costDiff >= 0 ? 'Hemat' : 'Tambah'}: ${priceStr(Math.abs(s.costDiff))}`,
       `  💬 ${s.reason}`,
       '',
@@ -289,7 +289,7 @@ function getHoldTag(p) {
   return '';
 }
 
-function trendingCard(transfersIn, transfersOut, currentGw) {
+function trendingCard(transfersIn, currentGw) {
   const lines = [];
 
   lines.push(`<b>📈 TRANSFER IN — GW${currentGw}</b>`);
@@ -299,7 +299,7 @@ function trendingCard(transfersIn, transfersOut, currentGw) {
     const qIcon = p.scoring.qualityScore >= 70 ? '🟢' : p.scoring.qualityScore >= 40 ? '🟡' : '🔴';
     const tag = getPlayerTag(p);
 
-    lines.push(`${num}. <b>${p.web_name}</b> — ${p.teamData?.short_name || '?'}`);
+    lines.push(`${num}. <b>${escapeHtml(p.web_name)}</b> — ${p.teamData?.short_name || '?'}`);
     lines.push(`      +${p.transfers_in_event.toLocaleString()} transfers`);
     lines.push(`      ${qIcon} Q:${p.scoring.qualityScore} · ${priceStr(p.now_cost)} · EO ${p.selected_by_percent}%`);
     if (tag) lines.push(`      <b>${tag}</b>`);
@@ -323,7 +323,7 @@ function trendingOutCard(transfersOut, currentGw) {
     if (p.scoring.regression === 'OVERPERFORMING') reasons.push('📉 Overperform');
     const holdTag = getHoldTag(p);
 
-    lines.push(`${num}. <b>${p.web_name}</b> — ${p.teamData?.short_name || '?'}`);
+    lines.push(`${num}. <b>${escapeHtml(p.web_name)}</b> — ${p.teamData?.short_name || '?'}`);
     lines.push(`      -${p.transfers_out_event.toLocaleString()} transfers`);
     if (reasons.length > 0) {
       lines.push(`      ${reasons.join(' · ')}`);
@@ -356,7 +356,7 @@ function netTransferCard(players, currentGw) {
   lines.push('');
   gainers.forEach((p, i) => {
     const num = `${i + 1}`.padStart(2, ' ');
-    lines.push(`${num}. <b>${p.web_name}</b> (${p.teamData?.short_name || '?'}) · <b>+${p.netTransfer.toLocaleString()}</b> · Q:${p.scoring.qualityScore}`);
+    lines.push(`${num}. <b>${escapeHtml(p.web_name)}</b> (${p.teamData?.short_name || '?'}) · <b>+${p.netTransfer.toLocaleString()}</b> · Q:${p.scoring.qualityScore}`);
   });
 
   lines.push('');
@@ -364,7 +364,7 @@ function netTransferCard(players, currentGw) {
   lines.push('');
   losers.forEach((p, i) => {
     const num = `${i + 1}`.padStart(2, ' ');
-    lines.push(`${num}. <b>${p.web_name}</b> (${p.teamData?.short_name || '?'}) · <b>${p.netTransfer.toLocaleString()}</b> · Q:${p.scoring.qualityScore}`);
+    lines.push(`${num}. <b>${escapeHtml(p.web_name)}</b> (${p.teamData?.short_name || '?'}) · <b>${p.netTransfer.toLocaleString()}</b> · Q:${p.scoring.qualityScore}`);
   });
 
   return lines.join('\n');
@@ -378,7 +378,7 @@ function analyzeCard(p, currentGw) {
   const lines = [
     `<b>🔬 ANALISIS MENDALAM</b>`,
     ``,
-    `<b>${p.web_name}</b> — ${posLabel(p.element_type)}`,
+    `<b>${escapeHtml(p.web_name)}</b> — ${posLabel(p.element_type)}`,
     `${p.teamData?.name || 'Unknown'} | ${priceStr(p.now_cost)} | EO: ${p.selected_by_percent}%`,
     ``,
   ];
@@ -537,7 +537,7 @@ function historyCard(p, trend) {
   const lines = [
     `<b>📜 DATA HISTORIS 3 MUSIM</b>`,
     ``,
-    `<b>${p.web_name}</b> — ${posLabel(p.element_type)}`,
+    `<b>${escapeHtml(p.web_name)}</b> — ${posLabel(p.element_type)}`,
     `${p.teamData?.name || 'Unknown'} | ${priceStr(p.now_cost)}`,
     ``,
   ];
@@ -605,7 +605,7 @@ function historyCard(p, trend) {
   }
 
   lines.push('');
-  lines.push(`<i>💡 Gunakan /analyze ${p.web_name} untuk analisis lengkap musim ini</i>`);
+  lines.push(`<i>💡 Gunakan /analyze ${escapeHtml(p.web_name)} untuk analisis lengkap musim ini</i>`);
 
   return lines.join('\n');
 }
@@ -637,7 +637,7 @@ function bestXICard(manager, result, currentGw) {
         ? ` vs ${p.nextFixtures[0].opponent_name}(${p.nextFixtures[0].isHome ? 'H' : 'A'})`
         : '';
       lines.push(
-        `  ${posLabel(pos)} <b>${p.web_name}</b>${badge}${statusIcon} — ` +
+        `  ${posLabel(pos)} <b>${escapeHtml(p.web_name)}</b>${badge}${statusIcon} — ` +
         `${colorIcon(p.scoring.qualityScore)}Q:${p.scoring.qualityScore} | ` +
         `F:${p.form} | ${priceStr(p.now_cost)}${fixtureStr}`
       );
@@ -651,7 +651,7 @@ function bestXICard(manager, result, currentGw) {
     const p = result.bench[i];
     const statusIcon = p.status !== 'a' ? ` ${p.status === 'd' ? '⚠️' : '🏥'}` : '';
     lines.push(
-      `  ${i + 1}. ${posLabel(p.element_type)} ${p.web_name}${statusIcon} — ` +
+      `  ${i + 1}. ${posLabel(p.element_type)} ${escapeHtml(p.web_name)}${statusIcon} — ` +
       `${colorIcon(p.scoring.qualityScore)}Q:${p.scoring.qualityScore} | F:${p.form}`
     );
   }

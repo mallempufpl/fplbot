@@ -796,7 +796,7 @@ function registerCommands(bot) {
       if (err.response?.status === 404) {
         return ctx.reply(`❌ FPL ID ${managerId} tidak ditemukan. Pastikan ID-nya benar.`);
       }
-      ctx.reply(`❌ Gagal mengambil data squad.\n\nError: ${err.message}`);
+      ctx.reply('❌ Gagal mengambil data squad. Coba lagi nanti.');
     }
   });
 
@@ -976,7 +976,7 @@ function registerCommands(bot) {
       if (err.response?.status === 404) {
         return ctx.reply(`❌ FPL ID ${managerId} tidak ditemukan.`);
       }
-      ctx.reply(`❌ Gagal menghitung Best XI.\n\nError: ${err.message}`);
+      ctx.reply('❌ Gagal menghitung Best XI. Coba lagi nanti.');
     }
   });
 
@@ -1188,7 +1188,7 @@ function registerCommands(bot) {
       if (err.response?.status === 404) {
         return ctx.reply(`❌ FPL ID ${managerId} tidak ditemukan.`);
       }
-      ctx.reply(`❌ Gagal menganalisa squad.\n\nError: ${err.message}`);
+      ctx.reply('❌ Gagal menganalisa squad. Coba lagi nanti.');
     }
   });
 

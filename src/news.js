@@ -1,4 +1,5 @@
 const axios = require('axios');
+const { escapeHtml } = require('./format');
 
 // =====================
 // PARSE AKUN DARI ENV
@@ -284,10 +285,6 @@ async function fetchAccountNews(query, platform = null) {
 // =====================
 // FORMATTER
 // =====================
-
-function escapeHtml(text) {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 
 function formatNews(newsResults) {
   if (newsResults.length === 0) {

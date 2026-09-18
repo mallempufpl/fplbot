@@ -1,6 +1,7 @@
 require('dotenv').config();
 
 const { Telegraf } = require('telegraf');
+const crypto = require('crypto');
 const http = require('http');
 const { registerCommands } = require('./commands');
 const { registerAdminCommands } = require('./admin');
@@ -41,6 +42,7 @@ async function main() {
   try {
     if (WEBHOOK_DOMAIN) {
       // === WEBHOOK MODE (Railway/Render/Production) ===
+      const webhookSecret = crypto.randomBytes(32).toString('hex');
       const webhookPath = `/webhook/${BOT_TOKEN.split(':')[0]}`;
       const webhookUrl = `https://${WEBHOOK_DOMAIN}${webhookPath}`;
 
@@ -51,6 +53,14 @@ async function main() {
           const m = getMetrics();
           res.end(JSON.stringify({ status: 'ok', uptime: m.uptime, memory_mb: m.memoryMB, commands: m.commands.total }));
         } else if (req.url === webhookPath && req.method === 'POST') {
+          // Verify webhook secret token from Telegram
+          const token = req.headers['x-telegram-bot-api-secret-token'];
+          if (token !== webhookSecret) {
+            res.writeHead(403);
+            res.end();
+            return;
+          }
+
           const MAX_BODY = 1024 * 1024; // 1MB limit
           let body = '';
           let exceeded = false;
@@ -85,7 +95,7 @@ async function main() {
         console.log(`🌐 Server on port ${PORT}`);
       });
 
-      await bot.telegram.setWebhook(webhookUrl);
+      await bot.telegram.setWebhook(webhookUrl, { secret_token: webhookSecret });
       console.log(`🔗 Webhook mode: ${webhookUrl}`);
 
     } else {
