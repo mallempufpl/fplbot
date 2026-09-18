@@ -40,26 +40,26 @@ axiosRetry(fplClient, {
   },
 });
 
-let cache = { bootstrap: null, fixtures: null, ts: 0 };
+let cache = { bootstrap: null, fixtures: null, bootstrapTs: 0, fixturesTs: 0 };
 const CACHE_TTL = 3600_000; // 1 jam
 
 async function fetchBootstrap() {
   const now = Date.now();
-  if (cache.bootstrap && now - cache.ts < CACHE_TTL) return cache.bootstrap;
+  if (cache.bootstrap && now - cache.bootstrapTs < CACHE_TTL) return cache.bootstrap;
 
   const { data } = await fplClient.get(`${BASE}/bootstrap-static/`);
   cache.bootstrap = data;
-  cache.ts = now;
+  cache.bootstrapTs = now;
   return data;
 }
 
 async function fetchFixtures() {
   const now = Date.now();
-  if (cache.fixtures && now - cache.ts < CACHE_TTL) return cache.fixtures;
+  if (cache.fixtures && now - cache.fixturesTs < CACHE_TTL) return cache.fixtures;
 
   const { data } = await fplClient.get(`${BASE}/fixtures/`);
   cache.fixtures = data;
-  cache.ts = now;
+  cache.fixturesTs = now;
   return data;
 }
 
@@ -85,7 +85,7 @@ async function fetchManagerTransfers(managerId) {
 }
 
 function clearCache() {
-  cache = { bootstrap: null, fixtures: null, ts: 0 };
+  cache = { bootstrap: null, fixtures: null, bootstrapTs: 0, fixturesTs: 0 };
 }
 
 // =====================
@@ -371,17 +371,25 @@ async function exchangeAuthCode(redirectUrl, userId) {
     return { success: false, error: 'Tidak ada login yang sedang berlangsung. Jalankan /fpllogin dulu.' };
   }
 
-  // Extract code from redirect URL
-  let code;
+  // Extract code and state from redirect URL
+  let code, state;
   try {
     const url = new URL(redirectUrl);
     code = url.searchParams.get('code');
+    state = url.searchParams.get('state');
   } catch {
     code = redirectUrl.trim();
   }
 
   if (!code) {
+    pendingPkceMap.delete(id);
     return { success: false, error: 'Tidak menemukan kode otorisasi di URL. Pastikan copy URL lengkap.' };
+  }
+
+  // Validate state parameter to prevent CSRF
+  if (state && state !== pendingPkce.state) {
+    pendingPkceMap.delete(id);
+    return { success: false, error: 'State parameter tidak cocok. Coba /fpllogin lagi.' };
   }
 
   try {

@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { escapeHtml } = require('./format');
 
 const ENV_PATH = path.join(__dirname, '..', '.env');
 
@@ -189,12 +190,11 @@ function registerAdminCommands(bot) {
 
   // /myid — cek chat ID sendiri (berguna untuk setup awal)
   bot.command('myid', (ctx) => {
-    const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     ctx.replyWithHTML(
       `🆔 <b>Info Akun Telegram Kamu:</b>\n\n` +
       `Chat ID: <code>${ctx.from.id}</code>\n` +
-      `Username: ${ctx.from.username ? '@' + esc(ctx.from.username) : '(tidak ada)'}\n` +
-      `Nama: ${esc(ctx.from.first_name)} ${esc(ctx.from.last_name)}\n\n` +
+      `Username: ${ctx.from.username ? '@' + escapeHtml(ctx.from.username) : '(tidak ada)'}\n` +
+      `Nama: ${escapeHtml(ctx.from.first_name)} ${escapeHtml(ctx.from.last_name)}\n\n` +
       `💡 Gunakan Chat ID di atas untuk CHAT_ID di .env:\n` +
       `<code>/setenv CHAT_ID ${ctx.from.id}</code>`
     );

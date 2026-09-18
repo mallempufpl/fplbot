@@ -72,6 +72,10 @@ function getDb() {
       args TEXT,
       timestamp TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE INDEX IF NOT EXISTS idx_watchlist_player ON watchlist(player_id);
+    CREATE INDEX IF NOT EXISTS idx_activity_chat ON user_activity(chat_id);
+    CREATE INDEX IF NOT EXISTS idx_activity_timestamp ON user_activity(timestamp);
   `);
 
   // Migrasi: tambah kolom baru jika belum ada (untuk DB yang sudah ada)
@@ -86,6 +90,8 @@ function getDb() {
   addCol('last_seen', "TEXT DEFAULT (datetime('now'))");
   addCol('command_count', 'INTEGER DEFAULT 0');
   addCol('last_command', 'TEXT');
+  addCol('fpl_token', 'TEXT');
+  addCol('fpl_refresh_token', 'TEXT');
 
   // Migrasi: tambah kolom baru di user_preferences jika belum ada
   const prefCols = db.pragma('table_info(user_preferences)').map(c => c.name);
@@ -208,6 +214,34 @@ function updateUserPreference(chatId, key, value) {
   getDb().prepare(`UPDATE user_preferences SET ${key} = ?, updated_at = datetime('now') WHERE chat_id = ?`)
     .run(value, String(chatId));
   return true;
+}
+
+// FPL token storage (per-user)
+function saveFplToken(chatId, token, refreshToken) {
+  getDb().prepare(
+    "UPDATE users SET fpl_token = ?, fpl_refresh_token = ? WHERE chat_id = ?"
+  ).run(token || null, refreshToken || null, String(chatId));
+}
+
+function getFplToken(chatId) {
+  const row = getDb().prepare(
+    'SELECT fpl_token, fpl_refresh_token FROM users WHERE chat_id = ?'
+  ).get(String(chatId));
+  if (!row || !row.fpl_token) return null;
+  return { token: row.fpl_token, refreshToken: row.fpl_refresh_token };
+}
+
+function clearFplToken(chatId) {
+  getDb().prepare(
+    "UPDATE users SET fpl_token = NULL, fpl_refresh_token = NULL WHERE chat_id = ?"
+  ).run(String(chatId));
+}
+
+// Get all users with FPL tokens (for session restore on startup)
+function getAllFplTokens() {
+  return getDb().prepare(
+    'SELECT chat_id, fpl_id, fpl_token, fpl_refresh_token FROM users WHERE fpl_token IS NOT NULL'
+  ).all();
 }
 
 // Language preference
@@ -351,6 +385,10 @@ module.exports = {
   getUserPreferences,
   updateUserPreference,
   getUsersWithNotification,
+  saveFplToken,
+  getFplToken,
+  clearFplToken,
+  getAllFplTokens,
   getUserLang,
   setUserLang,
   getUserTier,

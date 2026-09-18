@@ -7,6 +7,7 @@ const {
   getUsersWithNotification, getAllUsers,
 } = require('./database');
 const fmt = require('./format');
+const { trackError } = require('./monitor');
 
 // Broadcast helper — send message to multiple users with rate limiting
 async function broadcast(bot, chatIds, text, options = { parse_mode: 'HTML' }) {
@@ -190,6 +191,7 @@ function startScheduler(bot, adminChatId) {
 
     } catch (err) {
       console.error('[Cron] Error:', err.message);
+      trackError('cron:daily', err);
     }
   });
 
@@ -214,6 +216,7 @@ function startScheduler(bot, adminChatId) {
       }
     } catch (err) {
       console.error('[Cron] Error differential summary:', err.message);
+      trackError('cron:differential', err);
     }
   });
 
@@ -257,6 +260,7 @@ function startScheduler(bot, adminChatId) {
       console.log(`[Cron] Sent watchlist updates to ${sentCount} users`);
     } catch (err) {
       console.error('[Cron] Error watchlist update:', err.message);
+      trackError('cron:watchlist', err);
     }
   });
 

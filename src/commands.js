@@ -1,4 +1,4 @@
-const { fetchAll, fetchBootstrap, fetchManagerInfo, fetchManagerPicks, fetchManagerTransfers, fetchMyTeam, fplLogin, getFplLoginError, getFplLoginDebug, setFplSession, startDeviceCodeFlow, pollDeviceCodeToken, startAuthCodeFlow, exchangeAuthCode, getUserSession, clearUserSession, restoreSessions } = require('./fpl-api');
+const { fetchAll, fetchBootstrap, fetchManagerInfo, fetchManagerPicks, fetchManagerTransfers, fetchMyTeam, fplLogin, getFplLoginError, getFplLoginDebug, setFplSession, startAuthCodeFlow, exchangeAuthCode, getUserSession, clearUserSession } = require('./fpl-api');
 const { scoreAllPlayers } = require('./scoring');
 const {
   addToWatchlist, removeFromWatchlist, getWatchlist, getWatchlistCount,
@@ -1020,23 +1020,41 @@ function registerCommands(bot) {
       const nextGw = bootstrap.events.find(e => e.is_next)?.id || currentGw;
 
       let picks;
-      const gwsToTry = [];
-      if (nextGw > currentGw) gwsToTry.push(nextGw);
-      gwsToTry.push(currentGw);
-      for (let gw = currentGw - 1; gw >= Math.max(1, currentGw - 3); gw--) {
-        gwsToTry.push(gw);
+      let isLive = false;
+
+      // Try live squad via per-user session
+      const chatId = String(ctx.from.id);
+      const user = getUser(chatId);
+      const userFplId = user?.fpl_id;
+      if (managerId === userFplId && getUserSession(chatId)) {
+        try {
+          const myTeam = await fetchMyTeam(managerId, chatId);
+          if (myTeam?.picks) {
+            picks = { picks: myTeam.picks, entry_history: null };
+            isLive = true;
+          }
+        } catch {}
       }
-      for (const gw of gwsToTry) {
-        if (picks) break;
-        try { picks = await fetchManagerPicks(managerId, gw); } catch {}
+
+      if (!picks) {
+        const gwsToTry = [];
+        if (nextGw > currentGw) gwsToTry.push(nextGw);
+        gwsToTry.push(currentGw);
+        for (let gw = currentGw - 1; gw >= Math.max(1, currentGw - 3); gw--) {
+          gwsToTry.push(gw);
+        }
+        for (const gw of gwsToTry) {
+          if (picks) break;
+          try { picks = await fetchManagerPicks(managerId, gw); } catch {}
+        }
       }
       if (!picks) {
         return ctx.reply('❌ Belum ada data squad. Pastikan kamu sudah set squad di aplikasi FPL.');
       }
 
-      // Terapkan transfer pending
+      // Terapkan transfer pending (skip if live data)
       const picksGw = picks.entry_history?.event || currentGw;
-      const pendingTransfers = transfers.filter(t => t.event > picksGw);
+      const pendingTransfers = isLive ? [] : transfers.filter(t => t.event > picksGw);
       if (pendingTransfers.length > 0) {
         const updatedPicks = [...picks.picks];
         for (const tr of pendingTransfers) {
@@ -1826,7 +1844,7 @@ function registerCommands(bot) {
     clearUserSession(String(targetId));
     deleteUser(targetId);
     ctx.replyWithHTML(
-      `✅ User <b>${user.first_name || 'Unknown'}</b> (${user.chat_id}) berhasil dihapus.\n` +
+      `✅ User <b>${fmt.escapeHtml(user.first_name || 'Unknown')}</b> (${user.chat_id}) berhasil dihapus.\n` +
       `Data aktivitas juga dihapus.`
     );
   });
@@ -1851,7 +1869,7 @@ function registerCommands(bot) {
 
     setUserTier(targetId, tier);
     const info = formatTierInfo(tier);
-    ctx.replyWithHTML(`✅ Tier <b>${user.first_name || targetId}</b> diubah ke ${info}.`);
+    ctx.replyWithHTML(`✅ Tier <b>${fmt.escapeHtml(user.first_name || targetId)}</b> diubah ke ${info}.`);
 
     // Notify the user
     try {
@@ -2136,44 +2154,48 @@ function registerCommands(bot) {
       return ctx.reply('Paste URL redirect setelah login.\nContoh: /fplcode https://www.premierleague.com/?code=abc123&state=xyz');
     }
 
-    const msg = await ctx.reply('🔄 Menukar kode otorisasi...');
+    try {
+      const msg = await ctx.reply('🔄 Menukar kode otorisasi...');
 
-    const result = await exchangeAuthCode(input, chatId);
+      const result = await exchangeAuthCode(input, chatId);
 
-    if (result.success) {
-      // Persist token to DB
-      saveFplToken(chatId, result.token, result.refreshToken);
+      if (result.success) {
+        // Persist token to DB
+        saveFplToken(chatId, result.token, result.refreshToken);
 
-      // Test with user's FPL ID
-      const user = getUser(chatId);
-      const fplId = user?.fpl_id;
-      let teamInfo = '';
-      if (fplId) {
-        try {
-          const myTeam = await fetchMyTeam(fplId, chatId);
-          if (myTeam?.picks) {
-            const captain = myTeam.picks.find(p => p.is_captain);
-            teamInfo = `\n\n👥 ${myTeam.picks.length} pemain\n` +
-              `👑 Captain ID: ${captain?.element || '?'}\n` +
-              `💰 Bank: £${((myTeam.transfers?.bank || 0) / 10).toFixed(1)}m\n` +
-              `🔄 Free transfers: ${myTeam.transfers?.limit ?? '?'}`;
-          }
-        } catch {}
+        // Test with user's FPL ID
+        const user = getUser(chatId);
+        const fplId = user?.fpl_id;
+        let teamInfo = '';
+        if (fplId) {
+          try {
+            const myTeam = await fetchMyTeam(fplId, chatId);
+            if (myTeam?.picks) {
+              const captain = myTeam.picks.find(p => p.is_captain);
+              teamInfo = `\n\n👥 ${myTeam.picks.length} pemain\n` +
+                `👑 Captain ID: ${captain?.element || '?'}\n` +
+                `💰 Bank: £${((myTeam.transfers?.bank || 0) / 10).toFixed(1)}m\n` +
+                `🔄 Free transfers: ${myTeam.transfers?.limit ?? '?'}`;
+            }
+          } catch {}
+        }
+
+        await ctx.telegram.editMessageText(
+          ctx.chat.id, msg.message_id, null,
+          `✅ <b>Login Berhasil!</b>${teamInfo}\n\n` +
+          `<i>Token akan auto-refresh. Jika expired, jalankan /fpllogin lagi.</i>`,
+          { parse_mode: 'HTML' }
+        );
+      } else {
+        await ctx.telegram.editMessageText(
+          ctx.chat.id, msg.message_id, null,
+          `❌ <b>Login Gagal</b>\n\nCoba /fpllogin lagi untuk generate link baru.`,
+          { parse_mode: 'HTML' }
+        );
       }
-
-      await ctx.telegram.editMessageText(
-        ctx.chat.id, msg.message_id, null,
-        `✅ <b>Login Berhasil!</b>${teamInfo}\n\n` +
-        `<i>Token akan auto-refresh. Jika expired, jalankan /fpllogin lagi.</i>`,
-        { parse_mode: 'HTML' }
-      );
-    } else {
-      await ctx.telegram.editMessageText(
-        ctx.chat.id, msg.message_id, null,
-        `❌ <b>Login Gagal</b>\n\n${result.error}\n\n` +
-        `Coba /fpllogin lagi untuk generate link baru.`,
-        { parse_mode: 'HTML' }
-      );
+    } catch (err) {
+      console.error('Error /fplcode:', err.message);
+      ctx.reply('❌ Terjadi kesalahan saat login. Coba /fpllogin lagi.');
     }
   });
 
