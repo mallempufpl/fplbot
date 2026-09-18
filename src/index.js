@@ -6,6 +6,8 @@ const http = require('http');
 const { registerCommands } = require('./commands');
 const { registerAdminCommands } = require('./admin');
 const { startScheduler } = require('./scheduler');
+const { restoreSessions } = require('./fpl-api');
+const { getAllFplTokens } = require('./database');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const CHAT_ID = process.env.CHAT_ID;
@@ -118,6 +120,14 @@ async function main() {
       await bot.telegram.deleteWebhook({ drop_pending_updates: false });
       await bot.launch();
       console.log('🔗 Polling mode');
+    }
+
+    // Restore FPL sessions from DB
+    try {
+      const tokens = getAllFplTokens();
+      if (tokens.length > 0) restoreSessions(tokens);
+    } catch (err) {
+      console.error('FPL session restore warning:', err.message);
     }
 
     startScheduler(bot, CHAT_ID);

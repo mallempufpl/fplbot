@@ -1,10 +1,11 @@
-const { fetchAll, fetchBootstrap, fetchManagerInfo, fetchManagerPicks, fetchManagerTransfers, fetchMyTeam, fplLogin, getFplLoginError, getFplLoginDebug, setFplSession, startDeviceCodeFlow, pollDeviceCodeToken, startAuthCodeFlow, exchangeAuthCode } = require('./fpl-api');
+const { fetchAll, fetchBootstrap, fetchManagerInfo, fetchManagerPicks, fetchManagerTransfers, fetchMyTeam, fplLogin, getFplLoginError, getFplLoginDebug, setFplSession, startDeviceCodeFlow, pollDeviceCodeToken, startAuthCodeFlow, exchangeAuthCode, getUserSession, clearUserSession, restoreSessions } = require('./fpl-api');
 const { scoreAllPlayers } = require('./scoring');
 const {
   addToWatchlist, removeFromWatchlist, getWatchlist, getWatchlistCount,
   registerUser, getUser, getAllUsers, updateUserActivity, getUserActivity, getUserStats,
   getUserPreferences, updateUserPreference, deleteUser,
   getUserLang, setUserLang, getUserTier, setUserTier,
+  saveFplToken, getFplToken, clearFplToken,
 } = require('./database');
 const { t, getSupportedLanguages } = require('./i18n');
 const { trackCommand, trackError, getMetrics, resetMetrics } = require('./monitor');
@@ -283,6 +284,11 @@ function registerCommands(bot) {
       '/lang &lt;id|en&gt; — Ubah bahasa',
       '/export_data — Export semua data kamu',
       '/delete_account — Hapus akun &amp; data',
+      '',
+      '<b>🔐 FPL Login (Live Squad):</b>',
+      '/fpllogin — Login FPL via browser',
+      '/fpltoken — Set token FPL manual',
+      '/fpllogout — Hapus sesi FPL',
       ...(isOwner(ctx) ? [
         '',
         '<b>🔒 Admin (@Abulkhaer):</b>',
@@ -293,8 +299,6 @@ function registerCommands(bot) {
         '/xadd · /xdel — Kelola akun X',
         '/igadd · /igdel — Kelola akun IG',
         '/fplstatus — Cek status FPL login & data',
-        '/fpllogin — Login FPL via browser',
-        '/fpltoken — Set token FPL manual (dari browser)',
         '/setenv · /getenv · /delenv · /restart',
         '/refreshhistory — Refresh data historis',
       ] : []),
@@ -720,11 +724,14 @@ function registerCommands(bot) {
       let isProjected = false;
       let isLive = false;
 
-      // 1. Coba ambil live squad via my-team (jika ini FPL ID milik owner)
-      const ownerFplId = parseInt(process.env.FPL_ID);
-      if (managerId === ownerFplId && process.env.FPL_EMAIL) {
+      // 1. Coba ambil live squad via my-team (user harus login dengan akun FPL-nya sendiri)
+      const chatId = String(ctx.from.id);
+      const user = getUser(chatId);
+      const userFplId = user?.fpl_id;
+      // my-team only works with the token owner's own FPL ID
+      if (managerId === userFplId && getUserSession(chatId)) {
         try {
-          const myTeam = await fetchMyTeam(managerId);
+          const myTeam = await fetchMyTeam(managerId, chatId);
           if (myTeam?.picks) {
             picks = {
               picks: myTeam.picks,
@@ -788,6 +795,10 @@ function registerCommands(bot) {
       } else if (nextGw > displayGw) {
         output += `\n\n📌 <i>Menampilkan squad GW${displayGw} (terakhir dikonfirmasi).`;
         output += `\nPerubahan untuk GW${nextGw} terlihat setelah deadline.</i>`;
+        // Suggest login if viewing own squad without session
+        if (managerId === userFplId && !getUserSession(chatId)) {
+          output += `\n\n💡 <i>Gunakan /fpllogin untuk melihat squad live sebelum deadline.</i>`;
+        }
       }
 
       ctx.replyWithHTML(output);
@@ -826,10 +837,12 @@ function registerCommands(bot) {
       let picks;
       let displayGw = currentGw;
 
-      const ownerFplId = parseInt(process.env.FPL_ID);
-      if (managerId === ownerFplId && process.env.FPL_EMAIL) {
+      const chatId = String(ctx.from.id);
+      const user = getUser(chatId);
+      const userFplId = user?.fpl_id;
+      if (managerId === userFplId && getUserSession(chatId)) {
         try {
-          const myTeam = await fetchMyTeam(managerId);
+          const myTeam = await fetchMyTeam(managerId, chatId);
           if (myTeam?.picks) {
             picks = { picks: myTeam.picks };
             displayGw = nextGw;
@@ -1593,6 +1606,7 @@ function registerCommands(bot) {
     if (!user) {
       return ctx.editMessageText('❌ Akun tidak ditemukan.');
     }
+    clearUserSession(String(chatId));
     deleteUser(chatId);
     ctx.editMessageText(
       '✅ Akun dan semua data kamu berhasil dihapus.\n\n' +
@@ -1809,6 +1823,7 @@ function registerCommands(bot) {
     const user = getUser(targetId);
     if (!user) return ctx.reply(`❌ User ${targetId} tidak ditemukan.`);
 
+    clearUserSession(String(targetId));
     deleteUser(targetId);
     ctx.replyWithHTML(
       `✅ User <b>${user.first_name || 'Unknown'}</b> (${user.chat_id}) berhasil dihapus.\n` +
@@ -2092,15 +2107,14 @@ function registerCommands(bot) {
     ctx.replyWithHTML(lines.join('\n'));
   });
 
-  // /fpllogin — Auth Code + PKCE login (owner only)
+  // /fpllogin — Auth Code + PKCE login (all users)
   bot.command('fpllogin', async ctx => {
-    if (!isOwner(ctx)) return ctx.reply('🚫 Hanya pemilik bot yang bisa menggunakan perintah ini.');
-
-    const authUrl = startAuthCodeFlow();
+    const chatId = String(ctx.from.id);
+    const authUrl = startAuthCodeFlow(chatId);
 
     return ctx.replyWithHTML(
       '🔐 <b>FPL Login</b>\n\n' +
-      '<b>Langkah 1:</b> Buka link ini dan login:\n' +
+      '<b>Langkah 1:</b> Buka link ini dan login dengan akun FPL kamu:\n' +
       `<a href="${authUrl}">Klik untuk Login FPL</a>\n\n` +
       '<b>Langkah 2:</b> Setelah login berhasil, kamu akan diarahkan ke halaman Premier League.\n' +
       'Copy <b>seluruh URL</b> dari address bar browser.\n' +
@@ -2108,15 +2122,15 @@ function registerCommands(bot) {
       '<b>Langkah 3:</b> Paste URL tersebut ke sini:\n' +
       '<code>/fplcode URL_YANG_KAMU_COPY</code>\n\n' +
       '<i>Contoh:</i>\n' +
-      '<code>/fplcode https://www.premierleague.com/?code=abc123&amp;state=xyz</code>',
+      '<code>/fplcode https://www.premierleague.com/?code=abc123&amp;state=xyz</code>\n\n' +
+      '💡 <i>Login FPL diperlukan agar kamu bisa melihat squad live (sebelum deadline).</i>',
       { disable_web_page_preview: true }
     );
   });
 
-  // /fplcode — Exchange auth code from redirect URL (owner only)
+  // /fplcode — Exchange auth code from redirect URL (all users)
   bot.command('fplcode', async ctx => {
-    if (!isOwner(ctx)) return ctx.reply('🚫 Hanya pemilik bot yang bisa menggunakan perintah ini.');
-
+    const chatId = String(ctx.from.id);
     const input = ctx.message.text.split(' ').slice(1).join(' ').trim();
     if (!input) {
       return ctx.reply('Paste URL redirect setelah login.\nContoh: /fplcode https://www.premierleague.com/?code=abc123&state=xyz');
@@ -2124,15 +2138,19 @@ function registerCommands(bot) {
 
     const msg = await ctx.reply('🔄 Menukar kode otorisasi...');
 
-    const result = await exchangeAuthCode(input);
+    const result = await exchangeAuthCode(input, chatId);
 
     if (result.success) {
-      // Test with my-team
-      const fplId = parseInt(process.env.FPL_ID);
+      // Persist token to DB
+      saveFplToken(chatId, result.token, result.refreshToken);
+
+      // Test with user's FPL ID
+      const user = getUser(chatId);
+      const fplId = user?.fpl_id;
       let teamInfo = '';
       if (fplId) {
         try {
-          const myTeam = await fetchMyTeam(fplId);
+          const myTeam = await fetchMyTeam(fplId, chatId);
           if (myTeam?.picks) {
             const captain = myTeam.picks.find(p => p.is_captain);
             teamInfo = `\n\n👥 ${myTeam.picks.length} pemain\n` +
@@ -2159,17 +2177,15 @@ function registerCommands(bot) {
     }
   });
 
-  // /fpltoken — manual token input for FPL login (owner only)
+  // /fpltoken — manual token input for FPL login (all users)
   bot.command('fpltoken', async ctx => {
-    if (!isOwner(ctx)) return ctx.reply('🚫 Hanya pemilik bot yang bisa menggunakan perintah ini.');
-
+    const chatId = String(ctx.from.id);
     const token = ctx.message.text.split(' ').slice(1).join(' ').trim();
 
     if (!token) {
       return ctx.replyWithHTML(
         '<b>🔑 FPL Token Manual</b>\n\n' +
-        'PingOne Protect memblokir login otomatis dari server.\n' +
-        'Gunakan token manual dari browser:\n\n' +
+        'Gunakan token manual dari browser jika /fpllogin tidak berhasil:\n\n' +
         '<b>Cara mendapatkan token:</b>\n' +
         '1. Buka <code>https://fantasy.premierleague.com</code> di browser\n' +
         '2. Login seperti biasa\n' +
@@ -2181,20 +2197,24 @@ function registerCommands(bot) {
         '<code>/fpltoken pl_profile=eyJ...token...</code>\n' +
         'atau\n' +
         '<code>/fpltoken Bearer eyJ...token...</code>\n\n' +
-        '⚠️ Token akan expired setelah beberapa jam. Ulangi jika perlu.'
+        '⚠️ Token akan expired setelah beberapa jam. Ulangi jika perlu.\n' +
+        '⚠️ Token hanya bisa melihat squad dari akun FPL <b>kamu sendiri</b>.'
       );
     }
 
-    setFplSession(token);
+    setFplSession(token, chatId);
+    // Persist to DB
+    saveFplToken(chatId, token, null);
 
-    // Test token
-    const fplId = parseInt(process.env.FPL_ID);
+    // Test token with user's FPL ID
+    const user = getUser(chatId);
+    const fplId = user?.fpl_id;
     if (!fplId) {
-      return ctx.replyWithHTML('✅ Token disimpan.\n⚠️ FPL_ID belum di-set, tidak bisa test. Set via <code>/setenv FPL_ID yourId</code>');
+      return ctx.replyWithHTML('✅ Token disimpan.\n⚠️ FPL ID belum di-set. Gunakan <code>/start [FPL ID]</code> dulu.');
     }
 
     try {
-      const myTeam = await fetchMyTeam(fplId);
+      const myTeam = await fetchMyTeam(fplId, chatId);
       if (myTeam?.picks) {
         const captain = myTeam.picks.find(p => p.is_captain);
         ctx.replyWithHTML(
@@ -2206,16 +2226,25 @@ function registerCommands(bot) {
           '<i>Live squad sebelum deadline sekarang aktif.</i>'
         );
       } else {
-        ctx.reply('⚠️ Token disimpan tapi my-team response kosong. Pastikan FPL_ID benar.');
+        ctx.reply('⚠️ Token disimpan tapi my-team response kosong. Pastikan FPL ID benar dan token dari akun yang sama.');
       }
     } catch (err) {
       if (err.response?.status === 401 || err.response?.status === 403) {
-        setFplSession(null);
+        setFplSession(null, chatId);
+        clearFplToken(chatId);
         ctx.reply('❌ Token ditolak (401/403). Pastikan token masih valid dan belum expired.');
       } else {
-        ctx.reply(`⚠️ Token disimpan tapi gagal test: ${err.message}`);
+        ctx.reply('⚠️ Token disimpan tapi gagal test. Coba lagi nanti.');
       }
     }
+  });
+
+  // /fpllogout — clear FPL session (all users)
+  bot.command('fpllogout', async ctx => {
+    const chatId = String(ctx.from.id);
+    clearUserSession(chatId);
+    clearFplToken(chatId);
+    ctx.reply('✅ Sesi FPL kamu sudah dihapus. Gunakan /fpllogin untuk login kembali.');
   });
 
   // /refresh

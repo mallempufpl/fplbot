@@ -90,12 +90,42 @@ function clearCache() {
 
 // =====================
 // FPL LOGIN & MY-TEAM (live squad sebelum deadline)
+// Per-user session store
 // =====================
 
-let fplSession = null;
+// Per-user sessions: Map<chatId, { session, refreshToken }>
+const userSessions = new Map();
+// Per-user PKCE state: Map<chatId, { codeVerifier, state }>
+const pendingPkceMap = new Map();
+
+// Legacy globals for owner auto-login (env-based)
 let fplLoginError = null;
-let fplLoginDebug = null; // stores last login attempt debug info
-let fplRefreshToken = null;
+let fplLoginDebug = null;
+
+function getUserSession(userId) {
+  return userSessions.get(String(userId));
+}
+
+function setUserSession(userId, session, refreshToken) {
+  userSessions.set(String(userId), { session, refreshToken: refreshToken || null });
+}
+
+function clearUserSession(userId) {
+  userSessions.delete(String(userId));
+}
+
+// Restore sessions from DB on startup
+function restoreSessions(tokens) {
+  for (const t of tokens) {
+    if (t.fpl_token) {
+      userSessions.set(String(t.chat_id), {
+        session: t.fpl_token,
+        refreshToken: t.fpl_refresh_token || null,
+      });
+    }
+  }
+  if (tokens.length > 0) console.log(`[FPL] Restored ${tokens.length} user sessions from DB`);
+}
 
 // =====================
 // FPL LOGIN via PingOne DaVinci SSO
@@ -241,11 +271,13 @@ async function fplLogin() {
       );
 
       if (tokenResp.data.access_token) {
-        // Use the access token as Bearer for FPL API
-        fplSession = `Bearer ${tokenResp.data.access_token}`;
+        // Use the access token as Bearer for FPL API — store in owner session
+        const session = `Bearer ${tokenResp.data.access_token}`;
+        const ownerId = process.env.OWNER_ID || process.env.CHAT_ID || 'owner';
+        setUserSession(ownerId, session, tokenResp.data.refresh_token);
         fplLoginError = null;
         console.log('✅ FPL login berhasil via PingOne SSO');
-        return fplSession;
+        return session;
       } else {
         fplLoginError = `Token exchange gagal: ${tokenResp.data.error || 'unknown'}`;
         console.error('❌ FPL token exchange failed:', JSON.stringify(tokenResp.data).substring(0, 200));
@@ -284,30 +316,29 @@ function getFplLoginDebug() {
   return fplLoginDebug;
 }
 
-function setFplSession(token) {
+function setFplSession(token, userId) {
+  const id = String(userId || process.env.OWNER_ID || process.env.CHAT_ID || 'owner');
   if (!token) {
-    fplSession = null;
+    clearUserSession(id);
     return;
   }
   // Auto-detect format: Bearer token or cookie
+  let session;
   if (token.startsWith('Bearer ')) {
-    fplSession = token;
+    session = token;
   } else if (token.startsWith('ey')) {
-    // JWT token — wrap as Bearer
-    fplSession = `Bearer ${token}`;
+    session = `Bearer ${token}`;
   } else {
-    // Assume cookie value (pl_profile=...)
-    fplSession = token.includes('=') ? token : `pl_profile=${token}`;
+    session = token.includes('=') ? token : `pl_profile=${token}`;
   }
+  setUserSession(id, session, null);
   fplLoginError = null;
 }
 
 // =====================
-// Authorization Code + PKCE Flow
+// Authorization Code + PKCE Flow (per-user)
 // User logs in via browser, copies redirect URL, bot exchanges code for token
 // =====================
-
-let pendingPkce = null; // { codeVerifier, state }
 
 function generatePkce() {
   const codeVerifier = crypto.randomBytes(32).toString('base64url');
@@ -316,9 +347,9 @@ function generatePkce() {
   return { codeVerifier, codeChallenge, state };
 }
 
-function startAuthCodeFlow() {
+function startAuthCodeFlow(userId) {
   const pkce = generatePkce();
-  pendingPkce = { codeVerifier: pkce.codeVerifier, state: pkce.state };
+  pendingPkceMap.set(String(userId), { codeVerifier: pkce.codeVerifier, state: pkce.state });
 
   const params = new URLSearchParams({
     client_id: PINGONE_CLIENT_ID,
@@ -333,7 +364,9 @@ function startAuthCodeFlow() {
   return `${PINGONE_AUTH_ROOT}/${PINGONE_ENV_ID}/as/authorize?${params.toString()}`;
 }
 
-async function exchangeAuthCode(redirectUrl) {
+async function exchangeAuthCode(redirectUrl, userId) {
+  const id = String(userId);
+  const pendingPkce = pendingPkceMap.get(id);
   if (!pendingPkce) {
     return { success: false, error: 'Tidak ada login yang sedang berlangsung. Jalankan /fpllogin dulu.' };
   }
@@ -344,7 +377,6 @@ async function exchangeAuthCode(redirectUrl) {
     const url = new URL(redirectUrl);
     code = url.searchParams.get('code');
   } catch {
-    // Maybe user pasted just the code
     code = redirectUrl.trim();
   }
 
@@ -369,19 +401,19 @@ async function exchangeAuthCode(redirectUrl) {
       }
     );
 
-    pendingPkce = null;
+    pendingPkceMap.delete(id);
 
     if (data.access_token) {
-      fplSession = `Bearer ${data.access_token}`;
-      fplRefreshToken = data.refresh_token || null;
+      const session = `Bearer ${data.access_token}`;
+      setUserSession(id, session, data.refresh_token);
       fplLoginError = null;
-      console.log('✅ FPL auth code login berhasil');
-      return { success: true };
+      console.log(`✅ FPL auth code login berhasil (user ${id})`);
+      return { success: true, token: session, refreshToken: data.refresh_token };
     }
 
     return { success: false, error: data.error_description || data.error || 'Token exchange gagal' };
   } catch (err) {
-    pendingPkce = null;
+    pendingPkceMap.delete(id);
     return { success: false, error: err.message };
   }
 }
@@ -410,7 +442,8 @@ async function startDeviceCodeFlow() {
   }
 }
 
-async function pollDeviceCodeToken(deviceCode, interval = 5, expiresIn = 600) {
+async function pollDeviceCodeToken(deviceCode, userId, interval = 5, expiresIn = 600) {
+  const id = String(userId || process.env.OWNER_ID || process.env.CHAT_ID || 'owner');
   const deadline = Date.now() + expiresIn * 1000;
 
   while (Date.now() < deadline) {
@@ -432,11 +465,11 @@ async function pollDeviceCodeToken(deviceCode, interval = 5, expiresIn = 600) {
       );
 
       if (data.access_token) {
-        fplSession = `Bearer ${data.access_token}`;
-        fplRefreshToken = data.refresh_token || null;
+        const session = `Bearer ${data.access_token}`;
+        setUserSession(id, session, data.refresh_token);
         fplLoginError = null;
-        console.log('✅ FPL device code login berhasil');
-        return { success: true, access_token: data.access_token };
+        console.log(`✅ FPL device code login berhasil (user ${id})`);
+        return { success: true, access_token: data.access_token, refreshToken: data.refresh_token };
       }
 
       if (data.error === 'authorization_pending') {
@@ -458,14 +491,16 @@ async function pollDeviceCodeToken(deviceCode, interval = 5, expiresIn = 600) {
   return { success: false, error: 'Timeout — kamu tidak menyelesaikan login dalam waktu yang ditentukan' };
 }
 
-async function refreshFplToken() {
-  if (!fplRefreshToken) return false;
+async function refreshFplToken(userId) {
+  const id = String(userId || process.env.OWNER_ID || process.env.CHAT_ID || 'owner');
+  const session = getUserSession(id);
+  if (!session?.refreshToken) return false;
   try {
     const { data } = await axios.post(
       `${PINGONE_AUTH_ROOT}/${PINGONE_ENV_ID}/as/token`,
       new URLSearchParams({
         grant_type: 'refresh_token',
-        refresh_token: fplRefreshToken,
+        refresh_token: session.refreshToken,
         client_id: PINGONE_CLIENT_ID,
       }).toString(),
       {
@@ -475,13 +510,12 @@ async function refreshFplToken() {
       }
     );
     if (data.access_token) {
-      fplSession = `Bearer ${data.access_token}`;
-      if (data.refresh_token) fplRefreshToken = data.refresh_token;
-      console.log('✅ FPL token refreshed');
+      setUserSession(id, `Bearer ${data.access_token}`, data.refresh_token || session.refreshToken);
+      console.log(`✅ FPL token refreshed (user ${id})`);
       return true;
     }
     console.error('FPL token refresh failed:', data.error);
-    fplRefreshToken = null;
+    clearUserSession(id);
     return false;
   } catch (err) {
     console.error('FPL token refresh error:', err.message);
@@ -489,22 +523,33 @@ async function refreshFplToken() {
   }
 }
 
-function buildAuthHeaders() {
-  if (!fplSession) return null;
+function buildAuthHeaders(userId) {
+  const id = String(userId || process.env.OWNER_ID || process.env.CHAT_ID || 'owner');
+  const session = getUserSession(id);
+  if (!session?.session) return null;
   // Support both Bearer token (PingOne) and Cookie (legacy)
-  if (fplSession.startsWith('Bearer ')) {
-    return { Authorization: fplSession };
+  if (session.session.startsWith('Bearer ')) {
+    return { Authorization: session.session };
   }
-  return { Cookie: fplSession };
+  return { Cookie: session.session };
 }
 
-async function fetchMyTeam(managerId) {
-  if (!fplSession) {
-    await fplLogin();
-  }
-  if (!fplSession) return null;
+async function fetchMyTeam(managerId, userId) {
+  const id = String(userId || process.env.OWNER_ID || process.env.CHAT_ID || 'owner');
+  let session = getUserSession(id);
 
-  const authHeaders = buildAuthHeaders();
+  // If no per-user session, try owner env-based login as fallback (only for owner)
+  if (!session) {
+    const ownerId = String(process.env.OWNER_ID || process.env.CHAT_ID || 'owner');
+    if (id === ownerId) {
+      await fplLogin();
+      session = getUserSession(id);
+    }
+  }
+  if (!session) return null;
+
+  const authHeaders = buildAuthHeaders(id);
+  if (!authHeaders) return null;
 
   try {
     const { data } = await fplClient.get(`${BASE}/my-team/${managerId}/`, {
@@ -512,17 +557,16 @@ async function fetchMyTeam(managerId) {
     });
     return data;
   } catch (err) {
-    // Session expired — coba refresh token dulu, lalu login ulang
+    // Session expired — try refresh then retry
     if (err.response?.status === 401 || err.response?.status === 403) {
-      const refreshed = await refreshFplToken();
+      const refreshed = await refreshFplToken(id);
       if (!refreshed) {
-        fplSession = null;
-        await fplLogin();
+        clearUserSession(id);
+        return null;
       }
-      if (!fplSession) return null;
       try {
         const { data } = await fplClient.get(`${BASE}/my-team/${managerId}/`, {
-          headers: buildAuthHeaders(),
+          headers: buildAuthHeaders(id),
         });
         return data;
       } catch { return null; }
@@ -592,4 +636,5 @@ module.exports = {
   fetchMyTeam, fplLogin, getFplLoginError, getFplLoginDebug, setFplSession,
   startDeviceCodeFlow, pollDeviceCodeToken, refreshFplToken,
   startAuthCodeFlow, exchangeAuthCode,
+  getUserSession, clearUserSession, restoreSessions,
 };

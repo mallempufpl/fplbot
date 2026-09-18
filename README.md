@@ -92,6 +92,15 @@ Bot Telegram untuk analisa pemain Fantasy Premier League (FPL) dengan fokus pada
 | `/export_data` | Export semua data kamu (JSON) |
 | `/delete_account` | Hapus akun & semua data |
 
+### FPL Login (Live Squad)
+| Perintah | Fungsi |
+|----------|--------|
+| `/fpllogin` | Login FPL via browser (PKCE) |
+| `/fpltoken` | Set token FPL manual |
+| `/fpllogout` | Hapus sesi FPL |
+
+Setiap user bisa login dengan akun FPL masing-masing untuk melihat squad live sebelum deadline. Token disimpan per-user dan otomatis di-restore saat bot restart.
+
 ### Admin (Owner Only)
 | Perintah | Fungsi |
 |----------|--------|
@@ -102,8 +111,6 @@ Bot Telegram untuk analisa pemain Fantasy Premier League (FPL) dengan fokus pada
 | `/xadd` · `/xdel` | Kelola akun X |
 | `/igadd` · `/igdel` | Kelola akun IG |
 | `/fplstatus` | Status FPL login & data |
-| `/fpllogin` | Login FPL via browser (PKCE) |
-| `/fpltoken` | Set token FPL manual |
 | `/setenv` · `/getenv` · `/delenv` | Kelola environment variables |
 | `/restart` | Restart bot |
 | `/refreshhistory` | Refresh data historis 3 musim |
