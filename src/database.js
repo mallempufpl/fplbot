@@ -41,6 +41,8 @@ function getDb() {
       notify_watchlist INTEGER DEFAULT 1,
       notify_differentials INTEGER DEFAULT 0,
       watchlist_limit INTEGER DEFAULT 10,
+      lang TEXT DEFAULT 'id',
+      tier TEXT DEFAULT 'free',
       updated_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -84,6 +86,15 @@ function getDb() {
   addCol('last_seen', "TEXT DEFAULT (datetime('now'))");
   addCol('command_count', 'INTEGER DEFAULT 0');
   addCol('last_command', 'TEXT');
+
+  // Migrasi: tambah kolom baru di user_preferences jika belum ada
+  const prefCols = db.pragma('table_info(user_preferences)').map(c => c.name);
+  if (!prefCols.includes('lang')) {
+    db.exec("ALTER TABLE user_preferences ADD COLUMN lang TEXT DEFAULT 'id'");
+  }
+  if (!prefCols.includes('tier')) {
+    db.exec("ALTER TABLE user_preferences ADD COLUMN tier TEXT DEFAULT 'free'");
+  }
 
   // Migrasi watchlist: jika tabel lama tanpa chat_id, rebuild
   const watchCols = db.pragma('table_info(watchlist)').map(c => c.name);
@@ -197,6 +208,33 @@ function updateUserPreference(chatId, key, value) {
   getDb().prepare(`UPDATE user_preferences SET ${key} = ?, updated_at = datetime('now') WHERE chat_id = ?`)
     .run(value, String(chatId));
   return true;
+}
+
+// Language preference
+function getUserLang(chatId) {
+  const prefs = getUserPreferences(chatId);
+  return prefs?.lang || 'id';
+}
+
+function setUserLang(chatId, lang) {
+  const db = getDb();
+  // Ensure preferences row exists
+  getUserPreferences(chatId);
+  db.prepare("UPDATE user_preferences SET lang = ?, updated_at = datetime('now') WHERE chat_id = ?")
+    .run(lang, String(chatId));
+}
+
+// Tier management
+function getUserTier(chatId) {
+  const prefs = getUserPreferences(chatId);
+  return prefs?.tier || 'free';
+}
+
+function setUserTier(chatId, tier) {
+  const db = getDb();
+  getUserPreferences(chatId);
+  db.prepare("UPDATE user_preferences SET tier = ?, updated_at = datetime('now') WHERE chat_id = ?")
+    .run(tier, String(chatId));
 }
 
 // Get all users with a specific notification preference enabled
@@ -313,6 +351,10 @@ module.exports = {
   getUserPreferences,
   updateUserPreference,
   getUsersWithNotification,
+  getUserLang,
+  setUserLang,
+  getUserTier,
+  setUserTier,
   registerUser,
   getUser,
   updateUserActivity,

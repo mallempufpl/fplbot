@@ -25,13 +25,15 @@ registerAdminCommands(bot);
 // Handle unknown commands
 bot.on('text', ctx => {
   if (ctx.message.text.startsWith('/')) {
-    ctx.reply('❓ Perintah tidak dikenal. Ketik /start untuk melihat daftar perintah.');
+    ctx.reply('❓ Perintah tidak dikenal. Ketik /help untuk panduan.');
   }
 });
 
 // Error handling
+const { trackError, getMetrics } = require('./monitor');
 bot.catch((err, ctx) => {
   console.error(`❌ Bot error for ${ctx.updateType}:`, err.message);
+  trackError(`bot:${ctx.updateType}`, err);
 });
 
 // Start
@@ -46,7 +48,8 @@ async function main() {
       const server = http.createServer((req, res) => {
         if (req.url === '/health' || req.url === '/') {
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ status: 'ok', uptime: process.uptime() }));
+          const m = getMetrics();
+          res.end(JSON.stringify({ status: 'ok', uptime: m.uptime, memory_mb: m.memoryMB, commands: m.commands.total }));
         } else if (req.url === webhookPath && req.method === 'POST') {
           const MAX_BODY = 1024 * 1024; // 1MB limit
           let body = '';
@@ -90,7 +93,8 @@ async function main() {
       const server = http.createServer((req, res) => {
         if (req.url === '/health' || req.url === '/') {
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ status: 'ok', uptime: process.uptime() }));
+          const m = getMetrics();
+          res.end(JSON.stringify({ status: 'ok', uptime: m.uptime, memory_mb: m.memoryMB, commands: m.commands.total }));
         } else {
           res.writeHead(404);
           res.end();

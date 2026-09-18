@@ -1,7 +1,44 @@
 const axios = require('axios');
+const axiosRetry = require('axios-retry').default || require('axios-retry');
 const crypto = require('crypto');
 
+const { trackApiCall } = require('./monitor');
+
 const BASE = 'https://fantasy.premierleague.com/api';
+
+// Create axios instance with retry logic
+const fplClient = axios.create({ timeout: 15000 });
+
+// Track API call performance
+fplClient.interceptors.request.use(config => {
+  config._startTime = Date.now();
+  return config;
+});
+
+fplClient.interceptors.response.use(
+  response => {
+    const duration = Date.now() - (response.config._startTime || Date.now());
+    trackApiCall(duration, true, !!response.config['axios-retry']);
+    return response;
+  },
+  error => {
+    const duration = Date.now() - (error.config?._startTime || Date.now());
+    trackApiCall(duration, false, !!error.config?.['axios-retry']);
+    return Promise.reject(error);
+  }
+);
+
+axiosRetry(fplClient, {
+  retries: 3,
+  retryDelay: (retryCount) => axiosRetry.exponentialDelay(retryCount),
+  retryCondition: (error) =>
+    axiosRetry.isNetworkOrIdempotentRequestError(error) ||
+    error.response?.status === 429 ||
+    error.response?.status >= 500,
+  onRetry: (retryCount, error) => {
+    console.warn(`[FPL API] Retry ${retryCount}: ${error.message}`);
+  },
+});
 
 let cache = { bootstrap: null, fixtures: null, ts: 0 };
 const CACHE_TTL = 3600_000; // 1 jam
@@ -10,7 +47,7 @@ async function fetchBootstrap() {
   const now = Date.now();
   if (cache.bootstrap && now - cache.ts < CACHE_TTL) return cache.bootstrap;
 
-  const { data } = await axios.get(`${BASE}/bootstrap-static/`, { timeout: 15000 });
+  const { data } = await fplClient.get(`${BASE}/bootstrap-static/`);
   cache.bootstrap = data;
   cache.ts = now;
   return data;
@@ -20,29 +57,29 @@ async function fetchFixtures() {
   const now = Date.now();
   if (cache.fixtures && now - cache.ts < CACHE_TTL) return cache.fixtures;
 
-  const { data } = await axios.get(`${BASE}/fixtures/`, { timeout: 15000 });
+  const { data } = await fplClient.get(`${BASE}/fixtures/`);
   cache.fixtures = data;
   return data;
 }
 
 async function fetchPlayerHistory(playerId) {
-  const { data } = await axios.get(`${BASE}/element-summary/${playerId}/`, { timeout: 15000 });
+  const { data } = await fplClient.get(`${BASE}/element-summary/${playerId}/`);
   return data;
 }
 
 // Manager info & squad
 async function fetchManagerInfo(managerId) {
-  const { data } = await axios.get(`${BASE}/entry/${managerId}/`, { timeout: 15000 });
+  const { data } = await fplClient.get(`${BASE}/entry/${managerId}/`);
   return data;
 }
 
 async function fetchManagerPicks(managerId, gw) {
-  const { data } = await axios.get(`${BASE}/entry/${managerId}/event/${gw}/picks/`, { timeout: 15000 });
+  const { data } = await fplClient.get(`${BASE}/entry/${managerId}/event/${gw}/picks/`);
   return data;
 }
 
 async function fetchManagerTransfers(managerId) {
-  const { data } = await axios.get(`${BASE}/entry/${managerId}/transfers/`, { timeout: 15000 });
+  const { data } = await fplClient.get(`${BASE}/entry/${managerId}/transfers/`);
   return data;
 }
 
@@ -469,9 +506,8 @@ async function fetchMyTeam(managerId) {
   const authHeaders = buildAuthHeaders();
 
   try {
-    const { data } = await axios.get(`${BASE}/my-team/${managerId}/`, {
+    const { data } = await fplClient.get(`${BASE}/my-team/${managerId}/`, {
       headers: authHeaders,
-      timeout: 15000,
     });
     return data;
   } catch (err) {
@@ -484,9 +520,8 @@ async function fetchMyTeam(managerId) {
       }
       if (!fplSession) return null;
       try {
-        const { data } = await axios.get(`${BASE}/my-team/${managerId}/`, {
+        const { data } = await fplClient.get(`${BASE}/my-team/${managerId}/`, {
           headers: buildAuthHeaders(),
-          timeout: 15000,
         });
         return data;
       } catch { return null; }

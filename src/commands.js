@@ -3,8 +3,12 @@ const { scoreAllPlayers } = require('./scoring');
 const {
   addToWatchlist, removeFromWatchlist, getWatchlist, getWatchlistCount,
   registerUser, getUser, getAllUsers, updateUserActivity, getUserActivity, getUserStats,
-  getUserPreferences, updateUserPreference,
+  getUserPreferences, updateUserPreference, deleteUser,
+  getUserLang, setUserLang, getUserTier, setUserTier,
 } = require('./database');
+const { t, getSupportedLanguages } = require('./i18n');
+const { trackCommand, trackError, getMetrics, resetMetrics } = require('./monitor');
+const { PRO_COMMANDS, isCommandAllowed, getWatchlistLimit, formatUpgradeMessage, formatTierList, formatTierInfo } = require('./tiers');
 const {
   POSITION_NAMES, POSITION_EMOJI, ALL_METRICS, METRIC_LABELS,
   getActiveMetrics, getPositionWeights, DEFAULT_WEIGHTS,
@@ -107,7 +111,7 @@ function posIdFromStr(str) {
 }
 
 // Perintah yang bisa diakses tanpa registrasi
-const PUBLIC_COMMANDS = ['start', 'myid'];
+const PUBLIC_COMMANDS = ['start', 'myid', 'help', 'lang', 'pricing'];
 
 // Ambil FPL ID user: dari registered user atau fallback ke env (owner)
 function getUserFplId(ctx) {
@@ -133,13 +137,15 @@ function registerCommands(bot) {
 
     // Rate limit check (owner exempt)
     if (!isOwner(ctx) && isRateLimited(ctx.from.id)) {
-      return ctx.reply('⚠️ Terlalu banyak request. Tunggu sebentar sebelum mencoba lagi.');
+      const lang = getUserLang(ctx.from.id);
+      return ctx.reply(t(lang, 'rate_limited'));
     }
 
     // Owner selalu bisa akses
     if (isOwner(ctx)) {
       // Track aktivitas owner juga
       if (command) {
+        trackCommand(command);
         try { updateUserActivity(ctx.from.id, command, text.replace(/^\/\S+\s*/, '').trim() || null); } catch {}
       }
       return next();
@@ -148,15 +154,19 @@ function registerCommands(bot) {
     // Cek registrasi
     const user = getUser(ctx.from.id);
     if (!user) {
-      return ctx.replyWithHTML(
-        `👋 <b>Halo ${ctx.from.first_name || 'Sobat FPL'}!</b>\n\n` +
-        `Sebelum menggunakan bot ini, kamu perlu mendaftarkan FPL ID kamu dulu.\n\n` +
-        `Ketik /start untuk mulai registrasi.`
-      );
+      const lang = ctx.from.language_code?.startsWith('en') ? 'en' : 'id';
+      return ctx.replyWithHTML(t(lang, 'need_register', ctx.from.first_name || 'Sobat FPL'));
+    }
+
+    // Tier check — pro commands gated
+    const userTier = getUserTier(ctx.from.id);
+    if (command && !isCommandAllowed(userTier, command)) {
+      return ctx.replyWithHTML(formatUpgradeMessage(command, userTier));
     }
 
     // Track aktivitas user terdaftar
     if (command) {
+      trackCommand(command);
       try { updateUserActivity(ctx.from.id, command, text.replace(/^\/\S+\s*/, '').trim() || null); } catch {}
     }
 
@@ -236,6 +246,8 @@ function registerCommands(bot) {
     ctx.replyWithHTML([
       `<b>⚽ FPL Differential Bot</b>${userInfo}`,
       '',
+      '💡 Ketik /help untuk panduan interaktif lengkap.',
+      '',
       '<b>📊 Analisa Pemain:</b>',
       '/player &lt;nama&gt; — Detail pemain',
       '/analyze &lt;nama&gt; — Analisa mendalam pemain',
@@ -267,10 +279,16 @@ function registerCommands(bot) {
       '/settings — Notifikasi &amp; preferensi',
       '/metrics — Konfigurasi metrik scoring',
       '/refresh — Refresh data',
+      '/pricing — Lihat paket langganan',
+      '/lang &lt;id|en&gt; — Ubah bahasa',
+      '/export_data — Export semua data kamu',
+      '/delete_account — Hapus akun &amp; data',
       ...(isOwner(ctx) ? [
         '',
         '<b>🔒 Admin (@Abulkhaer):</b>',
+        '/stats — Bot health dashboard',
         '/users — Dashboard & monitor user',
+        '/settier &lt;chat_id&gt; &lt;tier&gt; — Set tier user',
         '/removeuser &lt;chat_id&gt; — Hapus user',
         '/xadd · /xdel — Kelola akun X',
         '/igadd · /igdel — Kelola akun IG',
@@ -281,6 +299,127 @@ function registerCommands(bot) {
         '/refreshhistory — Refresh data historis',
       ] : []),
     ].join('\n'));
+  });
+
+  // /help — Panduan lengkap dengan inline keyboard
+  bot.command('help', ctx => {
+    const { Markup } = require('telegraf');
+    ctx.replyWithHTML(
+      '<b>📖 Bantuan FPL Differential Bot</b>\n\n' +
+      'Pilih kategori di bawah untuk melihat panduan:',
+      Markup.inlineKeyboard([
+        [Markup.button.callback('📊 Analisa Pemain', 'help_analysis')],
+        [Markup.button.callback('👤 Squad & Transfer', 'help_squad')],
+        [Markup.button.callback('📰 Berita & Info', 'help_news')],
+        [Markup.button.callback('📋 Watchlist', 'help_watchlist')],
+        [Markup.button.callback('⚙️ Pengaturan', 'help_settings')],
+      ])
+    );
+  });
+
+  // Inline keyboard callback handlers for /help
+  bot.action('help_analysis', ctx => {
+    ctx.answerCbQuery();
+    ctx.editMessageText(
+      '<b>📊 Analisa Pemain</b>\n\n' +
+      '/player &lt;nama&gt; — Info singkat pemain\n' +
+      '/analyze &lt;nama&gt; — Analisa mendalam (xG, regresi, fixture)\n' +
+      '/history &lt;nama&gt; — Data historis 3 musim\n' +
+      '/compare &lt;A&gt; vs &lt;B&gt; — Bandingkan 2 pemain\n' +
+      '/best &lt;GK|DEF|MID|FWD&gt; — Top pemain per posisi\n' +
+      '/differentials [posisi] — Differential picks\n' +
+      '/regression — Pemain over/underperform vs xG\n\n' +
+      '<b>Contoh:</b>\n' +
+      '<code>/player Salah</code>\n' +
+      '<code>/compare Salah vs Palmer</code>\n' +
+      '<code>/best MID</code>',
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Kembali', callback_data: 'help_back' }]] } }
+    );
+  });
+
+  bot.action('help_squad', ctx => {
+    ctx.answerCbQuery();
+    ctx.editMessageText(
+      '<b>👤 Squad & Transfer</b>\n\n' +
+      '/squad [FPL ID] — Lihat squad (opsional: cek squad orang lain)\n' +
+      '/best11 [FPL ID] — Starting XI terbaik dari squad\n' +
+      '/suggest [FPL ID] — Saran transfer berdasarkan quality score\n' +
+      '/trending [in|out] — Transfer terpopuler\n' +
+      '/nettransfer — Net transfer (gainers vs losers)\n\n' +
+      '<b>Tips:</b> Jika FPL ID sudah terdaftar via /start, cukup ketik tanpa ID.',
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Kembali', callback_data: 'help_back' }]] } }
+    );
+  });
+
+  bot.action('help_news', ctx => {
+    ctx.answerCbQuery();
+    ctx.editMessageText(
+      '<b>📰 Berita & Info</b>\n\n' +
+      '/news — Semua berita FPL (X + Instagram)\n' +
+      '/news x — Berita dari X/Twitter saja\n' +
+      '/news ig — Berita dari Instagram saja\n' +
+      '/news &lt;akun&gt; — Berita dari akun tertentu\n' +
+      '/newslist — Daftar akun sumber berita\n' +
+      '/fixtures &lt;tim&gt; — Jadwal & FDR tim\n\n' +
+      '<b>Contoh:</b>\n' +
+      '<code>/news FPLStatus</code>\n' +
+      '<code>/fixtures Arsenal</code>',
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Kembali', callback_data: 'help_back' }]] } }
+    );
+  });
+
+  bot.action('help_watchlist', ctx => {
+    ctx.answerCbQuery();
+    ctx.editMessageText(
+      '<b>📋 Watchlist</b>\n\n' +
+      '/watch &lt;nama&gt; — Tambah pemain ke watchlist (maks 20)\n' +
+      '/unwatch &lt;nama&gt; — Hapus dari watchlist\n' +
+      '/watchlist — Lihat semua pemain di watchlist\n\n' +
+      '<b>Notifikasi otomatis:</b>\n' +
+      '• Perubahan harga pemain di watchlist\n' +
+      '• Perubahan status (cedera/suspensi)\n' +
+      '• Update harian skor & form\n\n' +
+      'Atur notifikasi via /settings',
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Kembali', callback_data: 'help_back' }]] } }
+    );
+  });
+
+  bot.action('help_settings', ctx => {
+    ctx.answerCbQuery();
+    ctx.editMessageText(
+      '<b>⚙️ Pengaturan</b>\n\n' +
+      '/settings — Lihat & toggle notifikasi\n' +
+      '/metrics — Konfigurasi metrik scoring\n' +
+      '/refresh — Refresh data dari FPL API\n' +
+      '/start &lt;FPL ID&gt; — Ubah FPL ID\n' +
+      '/delete_account — Hapus akun & semua data\n' +
+      '/export_data — Export semua data kamu\n\n' +
+      '<b>Notifikasi yang tersedia:</b>\n' +
+      '• Harga — perubahan harga pemain populer\n' +
+      '• Status — cedera, suspensi, ketersediaan\n' +
+      '• Watchlist — update harian watchlist kamu\n' +
+      '• Differentials — ringkasan mingguan (Jumat)',
+      { parse_mode: 'HTML', reply_markup: { inline_keyboard: [[{ text: '⬅️ Kembali', callback_data: 'help_back' }]] } }
+    );
+  });
+
+  bot.action('help_back', ctx => {
+    const { Markup } = require('telegraf');
+    ctx.answerCbQuery();
+    ctx.editMessageText(
+      '<b>📖 Bantuan FPL Differential Bot</b>\n\n' +
+      'Pilih kategori di bawah untuk melihat panduan:',
+      {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+          [Markup.button.callback('📊 Analisa Pemain', 'help_analysis')],
+          [Markup.button.callback('👤 Squad & Transfer', 'help_squad')],
+          [Markup.button.callback('📰 Berita & Info', 'help_news')],
+          [Markup.button.callback('📋 Watchlist', 'help_watchlist')],
+          [Markup.button.callback('⚙️ Pengaturan', 'help_settings')],
+        ]),
+      }
+    );
   });
 
   // /player <nama>
@@ -476,9 +615,11 @@ function registerCommands(bot) {
 
     try {
       const chatId = ctx.from.id;
+      const tier = getUserTier(chatId);
+      const limit = getWatchlistLimit(tier);
       const count = getWatchlistCount(chatId);
-      if (count >= 20) {
-        return ctx.reply('❌ Watchlist penuh (maks 20 pemain). Hapus pemain dulu dengan /unwatch.');
+      if (count >= limit) {
+        return ctx.reply(`❌ Watchlist penuh (maks ${limit} pemain). Hapus pemain dulu dengan /unwatch.${tier === 'free' ? '\n\n💡 Upgrade ke Pro untuk watchlist sampai 20 pemain.' : ''}`);
       }
 
       const { scored } = await getScoredPlayers();
@@ -489,7 +630,7 @@ function registerCommands(bot) {
       }
 
       addToWatchlist(chatId, result.id, result.web_name);
-      ctx.reply(`✅ ${result.web_name} ditambahkan ke watchlist kamu. (${count + 1}/20)`);
+      ctx.reply(`✅ ${result.web_name} ditambahkan ke watchlist kamu. (${count + 1}/${limit})`);
     } catch (err) {
       console.error('Error /watch:', err.message);
       ctx.reply('❌ Gagal menambahkan.');
@@ -525,7 +666,8 @@ function registerCommands(bot) {
       if (list.length === 0) return ctx.reply('📋 Watchlist kosong. Gunakan /watch <nama> untuk menambahkan.');
 
       const { scored } = await getScoredPlayers();
-      const lines = [`<b>📋 Watchlist Kamu (${list.length}/20)</b>\n`];
+      const wlLimit = getWatchlistLimit(getUserTier(chatId));
+      const lines = [`<b>📋 Watchlist Kamu (${list.length}/${wlLimit})</b>\n`];
       for (const w of list) {
         const p = scored.find(s => s.id === w.player_id);
         if (p) {
@@ -1375,8 +1517,14 @@ function registerCommands(bot) {
 
     // Show current preferences
     const on = (v) => v ? '✅ ON' : '❌ OFF';
+    const tier = getUserTier(chatId);
+    const tierInfo = formatTierInfo(tier);
+    const wlLimit = getWatchlistLimit(tier);
     ctx.replyWithHTML([
       '<b>⚙️ Pengaturan Notifikasi</b>\n',
+      `📊 Tier: ${tierInfo}`,
+      `🌐 Bahasa: ${prefs.lang === 'en' ? '🇬🇧 English' : '🇮🇩 Indonesia'}`,
+      '',
       `${on(prefs.notify_prices)} <b>Harga</b> — Perubahan harga pemain populer`,
       `${on(prefs.notify_status)} <b>Status</b> — Cedera, suspensi, ketersediaan`,
       `${on(prefs.notify_watchlist)} <b>Watchlist</b> — Update harian pemain di watchlist kamu`,
@@ -1388,8 +1536,120 @@ function registerCommands(bot) {
       '<code>/settings watchlist</code> — Toggle watchlist',
       '<code>/settings differentials</code> — Toggle differentials',
       '',
-      `📋 Watchlist: ${getWatchlistCount(chatId)}/20 pemain`,
+      `📋 Watchlist: ${getWatchlistCount(chatId)}/${wlLimit} pemain`,
+      tier === 'free' ? '\n💡 /pricing — lihat paket upgrade' : '',
     ].join('\n'));
+  });
+
+  // /pricing — Lihat paket langganan
+  bot.command('pricing', ctx => {
+    ctx.replyWithHTML(formatTierList());
+  });
+
+  // /lang — Ubah bahasa (ID/EN)
+  bot.command('lang', ctx => {
+    const chatId = ctx.from.id;
+    const arg = ctx.message.text.replace(/^\/lang\s*/i, '').trim().toLowerCase();
+    const currentLang = getUserLang(chatId);
+
+    if (!arg) {
+      return ctx.replyWithHTML(t(currentLang, 'lang_usage'));
+    }
+
+    const supported = getSupportedLanguages();
+    if (!supported.includes(arg)) {
+      return ctx.replyWithHTML(t(currentLang, 'lang_usage'));
+    }
+
+    setUserLang(chatId, arg);
+    ctx.replyWithHTML(t(arg, 'lang_changed', arg));
+  });
+
+  // /delete_account — Hapus akun sendiri dan semua data
+  bot.command('delete_account', ctx => {
+    const { Markup } = require('telegraf');
+    const user = getUser(ctx.from.id);
+    if (!user) return ctx.reply('❌ Kamu belum terdaftar.');
+
+    ctx.replyWithHTML(
+      '<b>⚠️ Hapus Akun</b>\n\n' +
+      'Ini akan menghapus <b>semua data kamu</b>:\n' +
+      '• Profil & FPL ID\n' +
+      '• Watchlist\n' +
+      '• Preferensi notifikasi\n' +
+      '• Riwayat aktivitas\n\n' +
+      '<b>Tindakan ini tidak bisa dibatalkan.</b>',
+      Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Ya, hapus akun saya', 'confirm_delete_account')],
+        [Markup.button.callback('❌ Batal', 'cancel_delete_account')],
+      ])
+    );
+  });
+
+  bot.action('confirm_delete_account', ctx => {
+    ctx.answerCbQuery();
+    const chatId = ctx.from.id;
+    const user = getUser(chatId);
+    if (!user) {
+      return ctx.editMessageText('❌ Akun tidak ditemukan.');
+    }
+    deleteUser(chatId);
+    ctx.editMessageText(
+      '✅ Akun dan semua data kamu berhasil dihapus.\n\n' +
+      'Kamu bisa mendaftar lagi kapan saja dengan /start <FPL ID>.'
+    );
+  });
+
+  bot.action('cancel_delete_account', ctx => {
+    ctx.answerCbQuery();
+    ctx.editMessageText('👍 Penghapusan akun dibatalkan.');
+  });
+
+  // /export_data — Export semua data user
+  bot.command('export_data', ctx => {
+    const chatId = ctx.from.id;
+    const user = getUser(chatId);
+    if (!user) return ctx.reply('❌ Kamu belum terdaftar.');
+
+    const watchlist = getWatchlist(chatId);
+    const prefs = getUserPreferences(chatId);
+    const activity = getUserActivity(chatId, 100);
+
+    const exportData = {
+      exported_at: new Date().toISOString(),
+      profile: {
+        chat_id: user.chat_id,
+        fpl_id: user.fpl_id,
+        username: user.username,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        registered_at: user.registered_at,
+        last_seen: user.last_seen,
+        command_count: user.command_count,
+      },
+      preferences: {
+        notify_prices: !!prefs.notify_prices,
+        notify_status: !!prefs.notify_status,
+        notify_watchlist: !!prefs.notify_watchlist,
+        notify_differentials: !!prefs.notify_differentials,
+      },
+      watchlist: watchlist.map(w => ({
+        player_id: w.player_id,
+        player_name: w.player_name,
+        added_at: w.added_at,
+      })),
+      recent_activity: activity.map(a => ({
+        command: a.command,
+        args: a.args,
+        timestamp: a.timestamp,
+      })),
+    };
+
+    const json = JSON.stringify(exportData, null, 2);
+    ctx.replyWithDocument(
+      { source: Buffer.from(json, 'utf-8'), filename: `fpl_bot_data_${chatId}.json` },
+      { caption: '📦 Ini semua data kamu yang tersimpan di bot.' }
+    );
   });
 
   // /analyze <nama> — Analisa mendalam pemain
@@ -1554,6 +1814,104 @@ function registerCommands(bot) {
       `✅ User <b>${user.first_name || 'Unknown'}</b> (${user.chat_id}) berhasil dihapus.\n` +
       `Data aktivitas juga dihapus.`
     );
+  });
+
+  // /settier <chat_id> <free|pro|team> — Ubah tier user (owner only)
+  bot.command('settier', ctx => {
+    if (!isOwner(ctx)) return ctx.reply('🚫 Hanya pemilik bot.');
+
+    const args = ctx.message.text.replace(/^\/settier\s*/i, '').trim().split(/\s+/);
+    if (args.length < 2) {
+      return ctx.replyWithHTML('Gunakan: <code>/settier [chat_id] [free|pro|team]</code>');
+    }
+
+    const targetId = args[0];
+    const tier = args[1].toLowerCase();
+    if (!['free', 'pro', 'team'].includes(tier)) {
+      return ctx.reply('❌ Tier harus: free, pro, atau team.');
+    }
+
+    const user = getUser(targetId);
+    if (!user) return ctx.reply(`❌ User ${targetId} tidak ditemukan.`);
+
+    setUserTier(targetId, tier);
+    const info = formatTierInfo(tier);
+    ctx.replyWithHTML(`✅ Tier <b>${user.first_name || targetId}</b> diubah ke ${info}.`);
+
+    // Notify the user
+    try {
+      bot.telegram.sendMessage(targetId,
+        `🎉 Tier kamu telah diupgrade ke ${info}!\n\nKetik /help untuk lihat fitur yang tersedia.`,
+        { parse_mode: 'HTML' }
+      ).catch(() => {});
+    } catch {}
+  });
+
+  // /stats — Bot health monitoring dashboard (owner only)
+  bot.command('stats', ctx => {
+    if (!isOwner(ctx)) return ctx.reply('🚫 Hanya pemilik bot.');
+
+    const m = getMetrics();
+    const userStats = getUserStats();
+
+    const lines = [
+      '<b>📊 BOT HEALTH DASHBOARD</b>',
+      '',
+      '<b>⏱ Uptime:</b>',
+      `  ${m.uptime}`,
+      '',
+      '<b>💻 System:</b>',
+      `  Memory: ${m.memoryMB}MB heap / ${m.memoryTotalMB}MB RSS`,
+      `  Node.js: ${process.version}`,
+      '',
+      '<b>👥 Users:</b>',
+      `  Total: ${userStats.totalUsers}`,
+      `  Active today: ${userStats.activeToday}`,
+      `  Active 7d: ${userStats.activeWeek}`,
+      '',
+      '<b>📨 Commands (since restart):</b>',
+      `  Total: ${m.commands.total}`,
+      `  Errors: ${m.commands.errors} (${m.commands.errorRate}%)`,
+      '',
+      '<b>🌐 FPL API:</b>',
+      `  Calls: ${m.api.calls}`,
+      `  Errors: ${m.api.errors} (${m.api.errorRate}%)`,
+      `  Retries: ${m.api.retries}`,
+      `  Avg latency: ${m.api.avgMs}ms`,
+      '',
+      '<b>📤 Messages:</b>',
+      `  Sent: ${m.messages.sent}`,
+      `  Failed: ${m.messages.failed}`,
+    ];
+
+    if (m.recentErrors.length > 0) {
+      lines.push('');
+      lines.push('<b>🚨 Recent Errors:</b>');
+      for (const err of m.recentErrors) {
+        const time = err.timestamp.split('T')[1]?.split('.')[0] || '';
+        lines.push(`  ${time} [${err.context}] ${err.message.substring(0, 80)}`);
+      }
+    }
+
+    if (userStats.topCommands.length > 0) {
+      lines.push('');
+      lines.push('<b>🔥 Top Commands (all time):</b>');
+      userStats.topCommands.slice(0, 5).forEach(c => {
+        lines.push(`  /${c.command} — ${c.cnt}x`);
+      });
+    }
+
+    lines.push('');
+    lines.push('<code>/stats reset</code> — Reset counters');
+
+    ctx.replyWithHTML(lines.join('\n'));
+  });
+
+  // /stats reset handler (inline within stats)
+  bot.hears(/^\/stats\s+reset$/i, ctx => {
+    if (!isOwner(ctx)) return;
+    resetMetrics();
+    ctx.reply('✅ Metrics counters reset.');
   });
 
   // /refreshhistory — Force refresh data historis (owner only)
