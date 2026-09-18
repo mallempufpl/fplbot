@@ -28,6 +28,9 @@ const {
   getAccountsX, getAccountsIG,
 } = require('./news');
 
+// Track users waiting to paste FPL login redirect URL
+const pendingFplLogin = new Set();
+
 // Rate limiter per user
 const rateLimitMap = new Map();
 const RATE_LIMIT_WINDOW = 60_000; // 1 menit
@@ -2130,19 +2133,25 @@ function registerCommands(bot) {
     const chatId = String(ctx.from.id);
     const authUrl = startAuthCodeFlow(chatId);
 
+    // Mark user as waiting for redirect URL
+    pendingFplLogin.add(chatId);
+    // Auto-expire after 10 minutes
+    setTimeout(() => pendingFplLogin.delete(chatId), 600_000);
+
     return ctx.replyWithHTML(
       '🔐 <b>FPL Login</b>\n\n' +
-      '<b>Langkah 1:</b> Buka link ini dan login dengan akun FPL kamu:\n' +
-      `<a href="${authUrl}">Klik untuk Login FPL</a>\n\n` +
-      '<b>Langkah 2:</b> Setelah login berhasil, kamu akan diarahkan ke halaman Premier League.\n' +
-      'Copy <b>seluruh URL</b> dari address bar browser.\n' +
-      '(URL akan mengandung <code>?code=...</code>)\n\n' +
-      '<b>Langkah 3:</b> Paste URL tersebut ke sini:\n' +
-      '<code>/fplcode URL_YANG_KAMU_COPY</code>\n\n' +
-      '<i>Contoh:</i>\n' +
-      '<code>/fplcode https://www.premierleague.com/?code=abc123&amp;state=xyz</code>\n\n' +
-      '💡 <i>Login FPL diperlukan agar kamu bisa melihat squad live (sebelum deadline).</i>',
-      { disable_web_page_preview: true }
+      '<b>Langkah 1:</b> Klik tombol di bawah untuk login FPL\n' +
+      '<b>Langkah 2:</b> Setelah login, copy <b>seluruh URL</b> dari address bar\n' +
+      '<b>Langkah 3:</b> Langsung paste URL-nya di chat ini\n\n' +
+      '💡 <i>Cukup paste URL-nya saja, tidak perlu ketik perintah apapun.</i>',
+      {
+        disable_web_page_preview: true,
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '🔑 Login FPL', url: authUrl }],
+          ],
+        },
+      }
     );
   });
 
@@ -2281,6 +2290,70 @@ function registerCommands(bot) {
     } catch (err) {
       console.error('Error /refresh:', err.message);
       ctx.reply('❌ Gagal refresh data.');
+    }
+  });
+
+  // Auto-detect FPL login redirect URL (pasted after /fpllogin)
+  bot.on('text', async (ctx, next) => {
+    const text = (ctx.message.text || '').trim();
+
+    // Skip commands
+    if (text.startsWith('/')) return next();
+
+    const chatId = String(ctx.from.id);
+
+    // Only process if user has a pending login
+    if (!pendingFplLogin.has(chatId)) return next();
+
+    // Check if text looks like a redirect URL with auth code
+    const looksLikeRedirect = text.includes('code=') &&
+      (text.includes('premierleague.com') || text.includes('state='));
+
+    if (!looksLikeRedirect) return next();
+
+    // Process the redirect URL
+    pendingFplLogin.delete(chatId);
+
+    try {
+      const msg = await ctx.reply('🔄 Menukar kode otorisasi...');
+
+      const result = await exchangeAuthCode(text, chatId);
+
+      if (result.success) {
+        saveFplToken(chatId, result.token, result.refreshToken);
+
+        const user = getUser(chatId);
+        const fplId = user?.fpl_id;
+        let teamInfo = '';
+        if (fplId) {
+          try {
+            const myTeam = await fetchMyTeam(fplId, chatId);
+            if (myTeam?.picks) {
+              const captain = myTeam.picks.find(p => p.is_captain);
+              teamInfo = `\n\n👥 ${myTeam.picks.length} pemain\n` +
+                `👑 Captain ID: ${captain?.element || '?'}\n` +
+                `💰 Bank: £${((myTeam.transfers?.bank || 0) / 10).toFixed(1)}m\n` +
+                `🔄 Free transfers: ${myTeam.transfers?.limit ?? '?'}`;
+            }
+          } catch {}
+        }
+
+        await ctx.telegram.editMessageText(
+          ctx.chat.id, msg.message_id, null,
+          `✅ <b>Login Berhasil!</b>${teamInfo}\n\n` +
+          `<i>Token akan auto-refresh. Jika expired, jalankan /fpllogin lagi.</i>`,
+          { parse_mode: 'HTML' }
+        );
+      } else {
+        await ctx.telegram.editMessageText(
+          ctx.chat.id, msg.message_id, null,
+          `❌ <b>Login Gagal</b>\n\nCoba /fpllogin lagi untuk generate link baru.`,
+          { parse_mode: 'HTML' }
+        );
+      }
+    } catch (err) {
+      console.error('Error auto-fplcode:', err.message);
+      ctx.reply('❌ Terjadi kesalahan saat login. Coba /fpllogin lagi.');
     }
   });
 }

@@ -25,7 +25,7 @@ const bot = new Telegraf(BOT_TOKEN);
 registerCommands(bot);
 registerAdminCommands(bot);
 
-// Handle unknown commands
+// Handle unknown commands (runs after all command/text handlers in commands.js)
 bot.on('text', ctx => {
   if (ctx.message.text.startsWith('/')) {
     ctx.reply('❓ Perintah tidak dikenal. Ketik /help untuk panduan.');
