@@ -27,9 +27,21 @@ function getDb() {
     );
 
     CREATE TABLE IF NOT EXISTS watchlist (
-      player_id INTEGER PRIMARY KEY,
+      chat_id TEXT,
+      player_id INTEGER,
       player_name TEXT,
-      added_at TEXT DEFAULT (datetime('now'))
+      added_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (chat_id, player_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS user_preferences (
+      chat_id TEXT PRIMARY KEY,
+      notify_prices INTEGER DEFAULT 1,
+      notify_status INTEGER DEFAULT 1,
+      notify_watchlist INTEGER DEFAULT 1,
+      notify_differentials INTEGER DEFAULT 0,
+      watchlist_limit INTEGER DEFAULT 10,
+      updated_at TEXT DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS cache_meta (
@@ -73,6 +85,32 @@ function getDb() {
   addCol('command_count', 'INTEGER DEFAULT 0');
   addCol('last_command', 'TEXT');
 
+  // Migrasi watchlist: jika tabel lama tanpa chat_id, rebuild
+  const watchCols = db.pragma('table_info(watchlist)').map(c => c.name);
+  if (!watchCols.includes('chat_id')) {
+    console.log('[DB] Migrating watchlist to per-user...');
+    const oldData = db.prepare('SELECT * FROM watchlist').all();
+    db.exec('DROP TABLE watchlist');
+    db.exec(`
+      CREATE TABLE watchlist (
+        chat_id TEXT,
+        player_id INTEGER,
+        player_name TEXT,
+        added_at TEXT DEFAULT (datetime('now')),
+        PRIMARY KEY (chat_id, player_id)
+      )
+    `);
+    // Migrate old watchlist to owner's chat_id
+    const ownerChatId = process.env.OWNER_ID || process.env.CHAT_ID || '';
+    if (ownerChatId && oldData.length > 0) {
+      const stmt = db.prepare('INSERT OR IGNORE INTO watchlist (chat_id, player_id, player_name, added_at) VALUES (?, ?, ?, ?)');
+      for (const w of oldData) {
+        stmt.run(ownerChatId, w.player_id, w.player_name, w.added_at);
+      }
+      console.log(`[DB] Migrated ${oldData.length} watchlist items to owner ${ownerChatId}`);
+    }
+  }
+
   return db;
 }
 
@@ -109,23 +147,80 @@ function getPreviousSnapshot(beforeDate) {
   return getSnapshot(row.date);
 }
 
-// Watchlist
-function addToWatchlist(playerId, playerName) {
+// Watchlist (per-user)
+function addToWatchlist(chatId, playerId, playerName) {
   getDb().prepare(
-    'INSERT OR REPLACE INTO watchlist (player_id, player_name) VALUES (?, ?)'
-  ).run(playerId, playerName);
+    'INSERT OR REPLACE INTO watchlist (chat_id, player_id, player_name) VALUES (?, ?, ?)'
+  ).run(String(chatId), playerId, playerName);
 }
 
-function removeFromWatchlist(playerId) {
-  getDb().prepare('DELETE FROM watchlist WHERE player_id = ?').run(playerId);
+function removeFromWatchlist(chatId, playerId) {
+  getDb().prepare('DELETE FROM watchlist WHERE chat_id = ? AND player_id = ?').run(String(chatId), playerId);
 }
 
-function getWatchlist() {
-  return getDb().prepare('SELECT * FROM watchlist ORDER BY added_at').all();
+function getWatchlist(chatId) {
+  return getDb().prepare('SELECT * FROM watchlist WHERE chat_id = ? ORDER BY added_at').all(String(chatId));
 }
 
-function isWatched(playerId) {
-  return !!getDb().prepare('SELECT 1 FROM watchlist WHERE player_id = ?').get(playerId);
+function getWatchlistCount(chatId) {
+  return getDb().prepare('SELECT COUNT(*) as cnt FROM watchlist WHERE chat_id = ?').get(String(chatId)).cnt;
+}
+
+function isWatched(chatId, playerId) {
+  return !!getDb().prepare('SELECT 1 FROM watchlist WHERE chat_id = ? AND player_id = ?').get(String(chatId), playerId);
+}
+
+// Get all unique watched player IDs across all users (for scheduler)
+function getAllWatchedPlayerIds() {
+  return getDb().prepare('SELECT DISTINCT player_id FROM watchlist').all().map(r => r.player_id);
+}
+
+// Get all users who watch a specific player
+function getUsersWatchingPlayer(playerId) {
+  return getDb().prepare('SELECT chat_id FROM watchlist WHERE player_id = ?').all(playerId).map(r => r.chat_id);
+}
+
+// User preferences
+function getUserPreferences(chatId) {
+  const db = getDb();
+  let prefs = db.prepare('SELECT * FROM user_preferences WHERE chat_id = ?').get(String(chatId));
+  if (!prefs) {
+    db.prepare('INSERT OR IGNORE INTO user_preferences (chat_id) VALUES (?)').run(String(chatId));
+    prefs = db.prepare('SELECT * FROM user_preferences WHERE chat_id = ?').get(String(chatId));
+  }
+  return prefs;
+}
+
+function updateUserPreference(chatId, key, value) {
+  const allowed = ['notify_prices', 'notify_status', 'notify_watchlist', 'notify_differentials'];
+  if (!allowed.includes(key)) return false;
+  getDb().prepare(`UPDATE user_preferences SET ${key} = ?, updated_at = datetime('now') WHERE chat_id = ?`)
+    .run(value, String(chatId));
+  return true;
+}
+
+// Get all users with a specific notification preference enabled
+function getUsersWithNotification(prefKey) {
+  const allowed = ['notify_prices', 'notify_status', 'notify_watchlist', 'notify_differentials'];
+  if (!allowed.includes(prefKey)) return [];
+  // Users who have preferences set + the pref is enabled
+  // Also include users WITHOUT preferences row (defaults are ON for prices/status/watchlist)
+  const defaultOn = ['notify_prices', 'notify_status', 'notify_watchlist'].includes(prefKey);
+  if (defaultOn) {
+    // Users with pref ON, OR users without pref row at all (default ON)
+    return getDb().prepare(`
+      SELECT u.chat_id FROM users u
+      LEFT JOIN user_preferences p ON u.chat_id = p.chat_id
+      WHERE p.${prefKey} = 1 OR p.chat_id IS NULL
+    `).all().map(r => r.chat_id);
+  } else {
+    // Only users who explicitly opted in
+    return getDb().prepare(`
+      SELECT u.chat_id FROM users u
+      INNER JOIN user_preferences p ON u.chat_id = p.chat_id
+      WHERE p.${prefKey} = 1
+    `).all().map(r => r.chat_id);
+  }
 }
 
 // Users
@@ -194,6 +289,8 @@ function getUserStats() {
 function deleteUser(chatId) {
   const db = getDb();
   db.prepare('DELETE FROM user_activity WHERE chat_id = ?').run(String(chatId));
+  db.prepare('DELETE FROM watchlist WHERE chat_id = ?').run(String(chatId));
+  db.prepare('DELETE FROM user_preferences WHERE chat_id = ?').run(String(chatId));
   db.prepare('DELETE FROM users WHERE chat_id = ?').run(String(chatId));
 }
 
@@ -209,7 +306,13 @@ module.exports = {
   addToWatchlist,
   removeFromWatchlist,
   getWatchlist,
+  getWatchlistCount,
   isWatched,
+  getAllWatchedPlayerIds,
+  getUsersWatchingPlayer,
+  getUserPreferences,
+  updateUserPreference,
+  getUsersWithNotification,
   registerUser,
   getUser,
   updateUserActivity,

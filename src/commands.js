@@ -1,8 +1,9 @@
 const { fetchAll, fetchBootstrap, fetchManagerInfo, fetchManagerPicks, fetchManagerTransfers, fetchMyTeam, fplLogin, getFplLoginError, getFplLoginDebug, setFplSession, startDeviceCodeFlow, pollDeviceCodeToken, startAuthCodeFlow, exchangeAuthCode } = require('./fpl-api');
 const { scoreAllPlayers } = require('./scoring');
 const {
-  addToWatchlist, removeFromWatchlist, getWatchlist,
+  addToWatchlist, removeFromWatchlist, getWatchlist, getWatchlistCount,
   registerUser, getUser, getAllUsers, updateUserActivity, getUserActivity, getUserStats,
+  getUserPreferences, updateUserPreference,
 } = require('./database');
 const {
   POSITION_NAMES, POSITION_EMOJI, ALL_METRICS, METRIC_LABELS,
@@ -263,6 +264,7 @@ function registerCommands(bot) {
       '',
       '<b>⚙️ Pengaturan:</b>',
       '/start &lt;FPL ID&gt; — Ubah FPL ID',
+      '/settings — Notifikasi &amp; preferensi',
       '/metrics — Konfigurasi metrik scoring',
       '/refresh — Refresh data',
       ...(isOwner(ctx) ? [
@@ -473,6 +475,12 @@ function registerCommands(bot) {
     if (!query) return ctx.reply('Gunakan: /watch <nama pemain>');
 
     try {
+      const chatId = ctx.from.id;
+      const count = getWatchlistCount(chatId);
+      if (count >= 20) {
+        return ctx.reply('❌ Watchlist penuh (maks 20 pemain). Hapus pemain dulu dengan /unwatch.');
+      }
+
       const { scored } = await getScoredPlayers();
       const result = findPlayer(scored, query);
 
@@ -480,8 +488,8 @@ function registerCommands(bot) {
         return ctx.reply(`❌ Pemain "${query}" tidak ditemukan atau ambigu.`);
       }
 
-      addToWatchlist(result.id, result.web_name);
-      ctx.reply(`✅ ${result.web_name} ditambahkan ke watchlist.`);
+      addToWatchlist(chatId, result.id, result.web_name);
+      ctx.reply(`✅ ${result.web_name} ditambahkan ke watchlist kamu. (${count + 1}/20)`);
     } catch (err) {
       console.error('Error /watch:', err.message);
       ctx.reply('❌ Gagal menambahkan.');
@@ -501,8 +509,8 @@ function registerCommands(bot) {
         return ctx.reply(`❌ Pemain "${query}" tidak ditemukan atau ambigu.`);
       }
 
-      removeFromWatchlist(result.id);
-      ctx.reply(`✅ ${result.web_name} dihapus dari watchlist.`);
+      removeFromWatchlist(ctx.from.id, result.id);
+      ctx.reply(`✅ ${result.web_name} dihapus dari watchlist kamu.`);
     } catch (err) {
       console.error('Error /unwatch:', err.message);
       ctx.reply('❌ Gagal menghapus.');
@@ -512,11 +520,12 @@ function registerCommands(bot) {
   // /watchlist
   bot.command('watchlist', async ctx => {
     try {
-      const list = getWatchlist();
+      const chatId = ctx.from.id;
+      const list = getWatchlist(chatId);
       if (list.length === 0) return ctx.reply('📋 Watchlist kosong. Gunakan /watch <nama> untuk menambahkan.');
 
       const { scored } = await getScoredPlayers();
-      const lines = ['<b>📋 Watchlist</b>\n'];
+      const lines = [`<b>📋 Watchlist Kamu (${list.length}/20)</b>\n`];
       for (const w of list) {
         const p = scored.find(s => s.id === w.player_id);
         if (p) {
@@ -529,6 +538,7 @@ function registerCommands(bot) {
           lines.push(`• ${w.player_name} (data tidak tersedia)`);
         }
       }
+      lines.push('\n💡 /settings — atur notifikasi watchlist');
       ctx.replyWithHTML(lines.join('\n'));
     } catch (err) {
       console.error('Error /watchlist:', err.message);
@@ -1332,6 +1342,54 @@ function registerCommands(bot) {
     }
 
     ctx.reply('❓ Perintah tidak dikenal. Ketik /metrics untuk lihat opsi.');
+  });
+
+  // /settings — Notifikasi & preferensi user
+  bot.command('settings', ctx => {
+    const chatId = ctx.from.id;
+    const prefs = getUserPreferences(chatId);
+    const args = ctx.message.text.replace(/^\/settings\s*/i, '').trim().toLowerCase();
+
+    // Toggle a preference
+    if (args) {
+      const toggleMap = {
+        'prices': 'notify_prices',
+        'harga': 'notify_prices',
+        'status': 'notify_status',
+        'watchlist': 'notify_watchlist',
+        'differentials': 'notify_differentials',
+        'differential': 'notify_differentials',
+      };
+
+      const prefKey = toggleMap[args];
+      if (!prefKey) {
+        return ctx.reply(`❌ Opsi tidak dikenal: "${args}"\n\nGunakan: /settings <prices|status|watchlist|differentials>`);
+      }
+
+      const currentVal = prefs[prefKey];
+      const newVal = currentVal ? 0 : 1;
+      updateUserPreference(chatId, prefKey, newVal);
+      const label = newVal ? '✅ ON' : '❌ OFF';
+      return ctx.reply(`${label} — Notifikasi ${args} ${newVal ? 'diaktifkan' : 'dinonaktifkan'}.`);
+    }
+
+    // Show current preferences
+    const on = (v) => v ? '✅ ON' : '❌ OFF';
+    ctx.replyWithHTML([
+      '<b>⚙️ Pengaturan Notifikasi</b>\n',
+      `${on(prefs.notify_prices)} <b>Harga</b> — Perubahan harga pemain populer`,
+      `${on(prefs.notify_status)} <b>Status</b> — Cedera, suspensi, ketersediaan`,
+      `${on(prefs.notify_watchlist)} <b>Watchlist</b> — Update harian pemain di watchlist kamu`,
+      `${on(prefs.notify_differentials)} <b>Differentials</b> — Ringkasan mingguan (Jumat)`,
+      '',
+      '<b>Toggle notifikasi:</b>',
+      '<code>/settings prices</code> — Toggle harga',
+      '<code>/settings status</code> — Toggle status',
+      '<code>/settings watchlist</code> — Toggle watchlist',
+      '<code>/settings differentials</code> — Toggle differentials',
+      '',
+      `📋 Watchlist: ${getWatchlistCount(chatId)}/20 pemain`,
+    ].join('\n'));
   });
 
   // /analyze <nama> — Analisa mendalam pemain
