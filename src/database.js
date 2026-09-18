@@ -135,14 +135,14 @@ function registerUser(chatId, fplId, ctx) {
     INSERT INTO users (chat_id, fpl_id, username, first_name, last_name, language_code)
     VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT(chat_id) DO UPDATE SET
-      fpl_id = excluded.fpl_id,
-      username = excluded.username,
-      first_name = excluded.first_name,
-      last_name = excluded.last_name,
-      language_code = excluded.language_code,
+      fpl_id = COALESCE(excluded.fpl_id, fpl_id),
+      username = COALESCE(excluded.username, username),
+      first_name = COALESCE(excluded.first_name, first_name),
+      last_name = COALESCE(excluded.last_name, last_name),
+      language_code = COALESCE(excluded.language_code, language_code),
       last_seen = datetime('now')
   `).run(
-    String(chatId), fplId,
+    String(chatId), fplId || null,
     from.username || null,
     from.first_name || null,
     from.last_name || null,
@@ -197,8 +197,8 @@ function deleteUser(chatId) {
   db.prepare('DELETE FROM users WHERE chat_id = ?').run(String(chatId));
 }
 
-function getAllUsers() {
-  return getDb().prepare('SELECT * FROM users ORDER BY last_seen DESC').all();
+function getAllUsers(limit = 50, offset = 0) {
+  return getDb().prepare('SELECT * FROM users ORDER BY last_seen DESC LIMIT ? OFFSET ?').all(limit, offset);
 }
 
 module.exports = {

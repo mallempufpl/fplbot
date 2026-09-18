@@ -37,9 +37,23 @@ function startScheduler(bot, chatId) {
       const priceChanges = [];
       const statusChanges = [];
 
+      // Track new players added to watchlist
+      const watchIds = new Set(getWatchlist().map(w => w.player_id));
+
       for (const p of data.players) {
         const old = prevMap[p.id];
-        if (!old) continue;
+        if (!old) {
+          // New player — only notify if watched
+          if (watchIds.has(p.id) && p.status !== 'a') {
+            statusChanges.push({
+              name: p.web_name,
+              oldStatus: 'a',
+              newStatus: p.status,
+              chance: p.chance_of_playing_next_round,
+            });
+          }
+          continue;
+        }
 
         // Price change
         if (p.now_cost !== old.now_cost) {
@@ -63,7 +77,6 @@ function startScheduler(bot, chatId) {
       }
 
       // Filter: kirim hanya perubahan pemain di watchlist + pemain populer
-      const watchIds = new Set(getWatchlist().map(w => w.player_id));
       const relevantPrice = priceChanges.filter(c => {
         const pl = data.players.find(p => p.web_name === c.name);
         return pl && (watchIds.has(pl.id) || parseFloat(pl.selected_by_percent) > 5);

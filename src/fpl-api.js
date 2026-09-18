@@ -178,7 +178,7 @@ async function fplLogin() {
       errorCode: loginResp.data.code || null,
       errorReason: loginResp.data.error_reason || loginResp.data.description || null,
       screenName: loginResp.data.screen?.name || null,
-      respSnippet: JSON.stringify(loginResp.data).substring(0, 400),
+      // Don't store raw response — may contain sensitive tokens
     });
 
     // Check for auth code in response

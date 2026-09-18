@@ -412,6 +412,35 @@ function extractTag(xml, tag) {
 }
 
 // =====================
+// NEWS CACHE (short TTL for deduplication)
+// =====================
+let newsCacheData = null;
+let newsCacheTs = 0;
+const NEWS_CACHE_TTL = 300_000; // 5 menit
+
+async function getCachedAllPosts() {
+  const now = Date.now();
+  if (newsCacheData && now - newsCacheTs < NEWS_CACHE_TTL) return newsCacheData;
+
+  const allTweets = [];
+  const fetches = getAccountsX().map(async (acc) => {
+    const tweets = await fetchTweets(acc.username, 10);
+    for (const t of tweets) allTweets.push({ ...t, source: acc.username });
+  });
+  await Promise.all(fetches);
+
+  const allIgPosts = [];
+  for (const acc of getAccountsIG()) {
+    const posts = await fetchInstagramPosts(acc.username, 5);
+    for (const p of posts) allIgPosts.push({ ...p, source: acc.username });
+  }
+
+  newsCacheData = [...allTweets, ...allIgPosts];
+  newsCacheTs = now;
+  return newsCacheData;
+}
+
+// =====================
 // NEWS INTEL (scan berita untuk pemain tertentu)
 // =====================
 
@@ -436,26 +465,8 @@ const POSITIVE_KEYWORDS = [
 async function fetchNewsIntel(playerNames) {
   const intel = {};
 
-  // Fetch semua tweet dari akun X yang dikonfigurasi
-  const allTweets = [];
-  const fetches = getAccountsX().map(async (acc) => {
-    const tweets = await fetchTweets(acc.username, 10);
-    for (const t of tweets) {
-      allTweets.push({ ...t, source: acc.username });
-    }
-  });
-  await Promise.all(fetches);
-
-  // Fetch semua post IG
-  const allIgPosts = [];
-  for (const acc of getAccountsIG()) {
-    const posts = await fetchInstagramPosts(acc.username, 5);
-    for (const p of posts) {
-      allIgPosts.push({ ...p, source: acc.username });
-    }
-  }
-
-  const allPosts = [...allTweets, ...allIgPosts];
+  // Use cached posts to avoid redundant fetches
+  const allPosts = await getCachedAllPosts();
 
   for (const name of playerNames) {
     const nameLower = name.toLowerCase();

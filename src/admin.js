@@ -5,7 +5,7 @@ const ENV_PATH = path.join(__dirname, '..', '.env');
 
 // Whitelist key yang boleh diubah via bot
 const ALLOWED_KEYS = [
-  'BOT_TOKEN', 'CHAT_ID', 'FPL_ID', 'PORT',
+  'BOT_TOKEN', 'CHAT_ID', 'OWNER_ID', 'FPL_ID', 'PORT',
   'EMAIL', 'IG_SESSION_ID', 'ADMIN_SECRET',
   'X_ACCOUNTS', 'IG_ACCOUNTS',
   'METRICS_ACTIVE', 'METRICS_WEIGHTS',
@@ -15,14 +15,17 @@ const ALLOWED_KEYS = [
 // Key yang nilainya di-mask saat ditampilkan
 const SENSITIVE_KEYS = ['BOT_TOKEN', 'ADMIN_SECRET', 'IG_SESSION_ID', 'FPL_PASSWORD'];
 
-const OWNER_ID = '123305470'; // @Abulkhaer
+function getOwnerId() {
+  return process.env.OWNER_ID || process.env.CHAT_ID || '';
+}
 
 function isOwner(ctx) {
-  return String(ctx.from.id) === OWNER_ID;
+  const ownerId = getOwnerId();
+  return ownerId && String(ctx.from.id) === String(ownerId);
 }
 
 // Key sensitif yang hanya owner bisa ubah
-const OWNER_ONLY_KEYS = ['BOT_TOKEN', 'CHAT_ID', 'FPL_EMAIL', 'FPL_PASSWORD', 'ADMIN_SECRET'];
+const OWNER_ONLY_KEYS = ['BOT_TOKEN', 'CHAT_ID', 'OWNER_ID', 'FPL_EMAIL', 'FPL_PASSWORD', 'ADMIN_SECRET'];
 
 function parseEnvFile() {
   if (!fs.existsSync(ENV_PATH)) return {};
@@ -50,7 +53,10 @@ function writeEnvFile(envObj) {
     lines.push(`${key}=${val}`);
   }
   lines.push('');
-  fs.writeFileSync(ENV_PATH, lines.join('\n'), 'utf-8');
+  // Atomic write: write to temp file then rename
+  const tmpPath = ENV_PATH + '.tmp';
+  fs.writeFileSync(tmpPath, lines.join('\n'), 'utf-8');
+  fs.renameSync(tmpPath, ENV_PATH);
 }
 
 function maskValue(key, value) {
@@ -86,7 +92,7 @@ function registerAdminCommands(bot) {
       return ctx.reply(`❌ Key "${key}" tidak diizinkan.\n\nKey yang tersedia: ${ALLOWED_KEYS.join(', ')}`);
     }
 
-    if (OWNER_ONLY_KEYS.includes(key) && String(ctx.from.id) !== OWNER_ID) {
+    if (OWNER_ONLY_KEYS.includes(key) && !isOwner(ctx)) {
       return ctx.reply('🚫 Key ini hanya bisa diubah oleh pemilik bot (@Abulkhaer).');
     }
 
@@ -183,11 +189,12 @@ function registerAdminCommands(bot) {
 
   // /myid — cek chat ID sendiri (berguna untuk setup awal)
   bot.command('myid', (ctx) => {
+    const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     ctx.replyWithHTML(
       `🆔 <b>Info Akun Telegram Kamu:</b>\n\n` +
       `Chat ID: <code>${ctx.from.id}</code>\n` +
-      `Username: ${ctx.from.username ? '@' + ctx.from.username : '(tidak ada)'}\n` +
-      `Nama: ${ctx.from.first_name} ${ctx.from.last_name || ''}\n\n` +
+      `Username: ${ctx.from.username ? '@' + esc(ctx.from.username) : '(tidak ada)'}\n` +
+      `Nama: ${esc(ctx.from.first_name)} ${esc(ctx.from.last_name)}\n\n` +
       `💡 Gunakan Chat ID di atas untuk CHAT_ID di .env:\n` +
       `<code>/setenv CHAT_ID ${ctx.from.id}</code>`
     );
@@ -205,4 +212,4 @@ function formatUptime(seconds) {
   return parts.join(' ');
 }
 
-module.exports = { registerAdminCommands, isOwner, OWNER_ID };
+module.exports = { registerAdminCommands, isOwner, getOwnerId };

@@ -48,9 +48,22 @@ async function main() {
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ status: 'ok', uptime: process.uptime() }));
         } else if (req.url === webhookPath && req.method === 'POST') {
+          const MAX_BODY = 1024 * 1024; // 1MB limit
           let body = '';
-          req.on('data', chunk => body += chunk);
+          let exceeded = false;
+          req.on('data', chunk => {
+            body += chunk;
+            if (body.length > MAX_BODY) {
+              exceeded = true;
+              req.destroy();
+            }
+          });
           req.on('end', () => {
+            if (exceeded) {
+              res.writeHead(413);
+              res.end();
+              return;
+            }
             try {
               bot.handleUpdate(JSON.parse(body), res);
             } catch (e) {

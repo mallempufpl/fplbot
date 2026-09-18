@@ -1,5 +1,10 @@
 const { POSITION_NAMES, POSITION_EMOJI, getActiveMetrics, getPositionWeights, METRIC_LABELS } = require('./config');
 
+function escapeHtml(text) {
+  if (!text) return '';
+  return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 function posLabel(elementType) {
   return `${POSITION_EMOJI[elementType] || ''} ${POSITION_NAMES[elementType] || '?'}`;
 }
@@ -148,8 +153,8 @@ function statusChangeNotif(changes) {
 
 function squadCard(manager, picks, scoredPlayers, teams, currentGw) {
   const lines = [
-    `<b>👤 ${manager.player_first_name} ${manager.player_last_name}</b>`,
-    `📋 ${manager.name}`,
+    `<b>👤 ${escapeHtml(manager.player_first_name)} ${escapeHtml(manager.player_last_name)}</b>`,
+    `📋 ${escapeHtml(manager.name)}`,
     `🏆 Overall Rank: ${manager.summary_overall_rank?.toLocaleString() || 'N/A'} | Points: ${manager.summary_overall_points || 0}`,
     `💰 Bank: £${((picks.entry_history?.bank || 0) / 10).toFixed(1)}m | Value: £${((picks.entry_history?.value || 0) / 10).toFixed(1)}m`,
     `📅 GW${currentGw} Points: ${picks.entry_history?.points || 0} | 🪑 Bench Pts: ${picks.entry_history?.points_on_bench || 0}`,
@@ -206,7 +211,10 @@ function squadCard(manager, picks, scoredPlayers, teams, currentGw) {
 
   for (const pick of bench) {
     const p = scoredPlayers.find(sp => sp.id === pick.element);
-    if (!p) continue;
+    if (!p) {
+      lines.push(`  ❓ Pemain ID ${pick.element} — data tidak tersedia`);
+      continue;
+    }
     lines.push(
       `  ${posLabel(p.element_type)} ${p.web_name} — ${colorIcon(p.scoring.qualityScore)}Q:${p.scoring.qualityScore} | ${priceStr(p.now_cost)}`
     );
@@ -605,7 +613,7 @@ function historyCard(p, trend) {
 function bestXICard(manager, result, currentGw) {
   const lines = [
     `<b>⭐ Best Starting XI — GW${currentGw}</b>`,
-    `<b>👤 ${manager.player_first_name} ${manager.player_last_name}</b> | ${manager.name}`,
+    `<b>👤 ${escapeHtml(manager.player_first_name)} ${escapeHtml(manager.player_last_name)}</b> | ${escapeHtml(manager.name)}`,
     ``,
     `<b>📐 Formasi: ${result.formation}</b>`,
     `<b>📊 Total Quality Score: ${result.totalScore}</b>`,
@@ -680,5 +688,5 @@ module.exports = {
   playerCard, compareCard, rankingList, fixtureTable,
   priceChangeNotif, statusChangeNotif, squadCard, transferSuggestions,
   trendingCard, trendingOutCard, netTransferCard,
-  analyzeCard, historyCard, bestXICard, posLabel, priceStr,
+  analyzeCard, historyCard, bestXICard, posLabel, priceStr, escapeHtml,
 };

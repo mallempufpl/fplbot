@@ -8,7 +8,7 @@ const {
   POSITION_NAMES, POSITION_EMOJI, ALL_METRICS, METRIC_LABELS,
   getActiveMetrics, getPositionWeights, DEFAULT_WEIGHTS,
 } = require('./config');
-const { isOwner, OWNER_ID } = require('./admin');
+const { isOwner, getOwnerId } = require('./admin');
 const fmt = require('./format');
 const {
   ensureHistoricalData, refreshHistoricalData, makePlayerKey,
@@ -22,27 +22,64 @@ const {
   getAccountsX, getAccountsIG,
 } = require('./news');
 
+// Rate limiter per user
+const rateLimitMap = new Map();
+const RATE_LIMIT_WINDOW = 60_000; // 1 menit
+const RATE_LIMIT_MAX = 20; // max 20 commands per menit
+
+function isRateLimited(userId) {
+  const now = Date.now();
+  const entry = rateLimitMap.get(userId);
+  if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW) {
+    rateLimitMap.set(userId, { windowStart: now, count: 1 });
+    return false;
+  }
+  entry.count++;
+  if (entry.count > RATE_LIMIT_MAX) return true;
+  return false;
+}
+
+// Cleanup stale entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [userId, entry] of rateLimitMap) {
+    if (now - entry.windowStart > RATE_LIMIT_WINDOW * 2) rateLimitMap.delete(userId);
+  }
+}, 300_000);
+
 // Cache scored players (refresh setiap fetch baru)
 let cachedScored = null;
 let cacheTs = 0;
+let cachePromise = null; // mutex: prevent concurrent fetches
 const CACHE_TTL = 600_000; // 10 menit
 
 async function getScoredPlayers() {
   const now = Date.now();
   if (cachedScored && now - cacheTs < CACHE_TTL) return cachedScored;
 
-  // Pastikan data historis sudah ada (lazy load, auto-refresh weekly)
-  try {
-    await ensureHistoricalData();
-  } catch (err) {
-    console.error('Historical data load warning:', err.message);
-  }
+  // If another request is already fetching, wait for it
+  if (cachePromise) return cachePromise;
 
-  const data = await fetchAll();
-  const scored = scoreAllPlayers(data.players);
-  cachedScored = { scored, teams: data.teams, currentGw: data.currentGw };
-  cacheTs = now;
-  return cachedScored;
+  cachePromise = (async () => {
+    try {
+      // Pastikan data historis sudah ada (lazy load, auto-refresh weekly)
+      try {
+        await ensureHistoricalData();
+      } catch (err) {
+        console.error('Historical data load warning:', err.message);
+      }
+
+      const data = await fetchAll();
+      const scored = scoreAllPlayers(data.players);
+      cachedScored = { scored, teams: data.teams, currentGw: data.currentGw };
+      cacheTs = Date.now();
+      return cachedScored;
+    } finally {
+      cachePromise = null;
+    }
+  })();
+
+  return cachePromise;
 }
 
 function findPlayer(scored, query) {
@@ -93,6 +130,11 @@ function registerCommands(bot) {
     // Public commands selalu diizinkan
     if (!command || PUBLIC_COMMANDS.includes(command)) return next();
 
+    // Rate limit check (owner exempt)
+    if (!isOwner(ctx) && isRateLimited(ctx.from.id)) {
+      return ctx.reply('⚠️ Terlalu banyak request. Tunggu sebentar sebelum mencoba lagi.');
+    }
+
     // Owner selalu bisa akses
     if (isOwner(ctx)) {
       // Track aktivitas owner juga
@@ -139,11 +181,12 @@ function registerCommands(bot) {
         const manager = await fetchManagerInfo(fplId);
         registerUser(ctx.from.id, fplId, ctx);
 
+        const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         return ctx.replyWithHTML([
           `✅ <b>Registrasi Berhasil!</b>`,
           ``,
-          `👤 <b>${manager.player_first_name} ${manager.player_last_name}</b>`,
-          `📋 ${manager.name}`,
+          `👤 <b>${esc(manager.player_first_name)} ${esc(manager.player_last_name)}</b>`,
+          `📋 ${esc(manager.name)}`,
           `🏆 Overall Rank: ${manager.summary_overall_rank?.toLocaleString() || 'N/A'}`,
           `📊 Total Points: ${manager.summary_overall_points || 0}`,
           ``,
@@ -242,6 +285,7 @@ function registerCommands(bot) {
   bot.command('player', async ctx => {
     const query = ctx.message.text.replace(/^\/player\s*/i, '').trim();
     if (!query) return ctx.reply('Gunakan: /player <nama pemain>');
+    if (query.length > 100) return ctx.reply('❌ Nama terlalu panjang.');
 
     try {
       const { scored } = await getScoredPlayers();
@@ -840,13 +884,33 @@ function registerCommands(bot) {
       }
 
       const bank = (picks.entry_history?.bank || 0);
-      const squadPlayerIds = picks.picks.map(pk => pk.element);
-      const squadPlayers = squadPlayerIds.map(id => scored.find(p => p.id === id)).filter(Boolean);
+      const squadPlayerIds = new Set(picks.picks.map(pk => pk.element));
+      const squadPlayers = picks.picks.map(pk => scored.find(p => p.id === pk.element)).filter(Boolean);
 
       // Hitung jumlah pemain per tim di squad
       const teamCount = {};
       for (const p of squadPlayers) {
         teamCount[p.team] = (teamCount[p.team] || 0) + 1;
+      }
+
+      // Pre-build index per posisi (O(n) sekali, bukan O(n) per iterasi)
+      const candidatesByPos = { 1: [], 2: [], 3: [], 4: [] };
+      const trendBonus = (p) => {
+        if (!p.scoring.trendData) return 0;
+        if (p.scoring.trendData.trendLabel === 'IMPROVING') return 5;
+        if (p.scoring.trendData.trendLabel === 'DECLINING') return -5;
+        return 0;
+      };
+      for (const p of scored) {
+        if (p.minutes > 0 && p.scoring.minutesSafe && !squadPlayerIds.has(p.id) && candidatesByPos[p.element_type]) {
+          candidatesByPos[p.element_type].push(p);
+        }
+      }
+      // Pre-sort each position group by quality + trend
+      for (const pos of [1, 2, 3, 4]) {
+        candidatesByPos[pos].sort((a, b) =>
+          (b.scoring.qualityScore + trendBonus(b)) - (a.scoring.qualityScore + trendBonus(a))
+        );
       }
 
       // Cari pemain terlemah per posisi (dari starting XI)
@@ -859,35 +923,14 @@ function registerCommands(bot) {
       const weakest = [...startingPlayers].sort((a, b) => a.scoring.qualityScore - b.scoring.qualityScore);
 
       for (const out of weakest.slice(0, 5)) {
-        // Selling price = beli price (simplified, FPL API doesn't expose selling price directly)
         const budget = out.now_cost + bank;
 
-        // Cari pengganti terbaik
-        const candidates = scored.filter(p =>
-          p.element_type === out.element_type &&   // posisi sama
-          p.id !== out.id &&                        // bukan pemain yang sama
-          !squadPlayerIds.includes(p.id) &&         // belum di squad
-          p.now_cost <= budget &&                   // masuk budget
-          p.minutes > 0 &&                          // pernah main
-          p.scoring.minutesSafe &&                  // aman menit
-          (teamCount[p.team] || 0) < 3 &&           // max 3 per tim
-          p.scoring.qualityScore > out.scoring.qualityScore // harus lebih baik
+        // Cari pengganti terbaik dari pre-built index
+        const best = candidatesByPos[out.element_type].find(p =>
+          p.now_cost <= budget &&
+          (teamCount[p.team] || 0) < 3 &&
+          p.scoring.qualityScore > out.scoring.qualityScore
         );
-
-        // Sort: prioritaskan pemain dengan trend bagus + quality score tinggi
-        candidates.sort((a, b) => {
-          // Bonus skor untuk trend IMPROVING, penalti untuk DECLINING
-          const trendBonus = (p) => {
-            if (!p.scoring.trendData) return 0;
-            if (p.scoring.trendData.trendLabel === 'IMPROVING') return 5;
-            if (p.scoring.trendData.trendLabel === 'DECLINING') return -5;
-            return 0;
-          };
-          const aScore = a.scoring.qualityScore + trendBonus(a);
-          const bScore = b.scoring.qualityScore + trendBonus(b);
-          return bScore - aScore;
-        });
-        const best = candidates[0];
         if (!best) continue;
 
         const scoreDiff = best.scoring.qualityScore - out.scoring.qualityScore;
@@ -985,7 +1028,8 @@ function registerCommands(bot) {
         console.error('News intel error:', err.message);
       }
 
-      const header = `<b>👤 ${manager.player_first_name} ${manager.player_last_name}</b> — ${manager.name}\n💰 Bank: £${(bank / 10).toFixed(1)}m\n\n`;
+      const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const header = `<b>👤 ${esc(manager.player_first_name)} ${esc(manager.player_last_name)}</b> — ${esc(manager.name)}\n💰 Bank: £${(bank / 10).toFixed(1)}m\n\n`;
       ctx.replyWithHTML(header + fmt.transferSuggestions(top) + newsSection, { disable_web_page_preview: true });
     } catch (err) {
       console.error('Error /suggest:', err.message, err.stack);
@@ -1096,20 +1140,22 @@ function registerCommands(bot) {
   function updateAccountEnv(key, accounts) {
     const value = accounts.join(',');
     process.env[key] = value;
-    // Persist ke .env file
+    // Persist ke .env file (atomic write)
     try {
       const fs = require('fs');
       const path = require('path');
       const envPath = path.join(__dirname, '..', '.env');
       if (fs.existsSync(envPath)) {
         let content = fs.readFileSync(envPath, 'utf-8');
-        const regex = new RegExp(`^${key}=.*$`, 'm');
+        const regex = new RegExp(`^${key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}=.*$`, 'm');
         if (regex.test(content)) {
           content = content.replace(regex, `${key}=${value}`);
         } else {
           content = content.trimEnd() + `\n${key}=${value}\n`;
         }
-        fs.writeFileSync(envPath, content, 'utf-8');
+        const tmpPath = envPath + '.tmp';
+        fs.writeFileSync(tmpPath, content, 'utf-8');
+        fs.renameSync(tmpPath, envPath);
       }
     } catch (err) {
       console.error('Error saving .env:', err.message);
@@ -1230,7 +1276,7 @@ function registerCommands(bot) {
       if (active.includes(metric)) return ctx.reply(`✅ ${metric.toUpperCase()} sudah aktif.`);
       active.push(metric);
       process.env.METRICS_ACTIVE = active.join(',');
-      cachedScored = null; cacheTs = 0;
+      cachedScored = null; cacheTs = 0; cachePromise = null;
       return ctx.reply(`✅ ${metric.toUpperCase()} diaktifkan. Data akan di-recalculate.`);
     }
 
@@ -1243,7 +1289,7 @@ function registerCommands(bot) {
       const active = getActiveMetrics().filter(m => m !== metric);
       if (active.length === 0) return ctx.reply('❌ Tidak bisa menonaktifkan semua metrik.');
       process.env.METRICS_ACTIVE = active.join(',');
-      cachedScored = null; cacheTs = 0;
+      cachedScored = null; cacheTs = 0; cachePromise = null;
       return ctx.reply(`❌ ${metric.toUpperCase()} dinonaktifkan. Data akan di-recalculate.`);
     }
 
@@ -1268,7 +1314,7 @@ function registerCommands(bot) {
       const entries = currentWeights ? currentWeights.split(',').filter(e => !e.startsWith(metric + ':')) : [];
       entries.push(`${metric}:${vals.join(':')}`);
       process.env.METRICS_WEIGHTS = entries.join(',');
-      cachedScored = null; cacheTs = 0;
+      cachedScored = null; cacheTs = 0; cachePromise = null;
 
       return ctx.replyWithHTML(
         `✅ <b>${metric.toUpperCase()}</b> weights updated:\n` +
@@ -1281,7 +1327,7 @@ function registerCommands(bot) {
     if (action === 'reset') {
       delete process.env.METRICS_ACTIVE;
       delete process.env.METRICS_WEIGHTS;
-      cachedScored = null; cacheTs = 0;
+      cachedScored = null; cacheTs = 0; cachePromise = null;
       return ctx.reply('✅ Metrik di-reset ke default. Data akan di-recalculate.');
     }
 
@@ -1353,11 +1399,12 @@ function registerCommands(bot) {
       if (!user) return ctx.reply(`❌ User dengan ID ${targetId} tidak ditemukan.`);
 
       const activity = getUserActivity(targetId, 20);
+      const esc = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       const lines = [
         `<b>👤 Detail User</b>\n`,
         `🆔 Chat ID: <code>${user.chat_id}</code>`,
-        `📋 Nama: <b>${user.first_name || '-'}${user.last_name ? ' ' + user.last_name : ''}</b>`,
-        `🏷 Username: ${user.username ? '@' + user.username : '(tidak ada)'}`,
+        `📋 Nama: <b>${esc(user.first_name) || '-'}${user.last_name ? ' ' + esc(user.last_name) : ''}</b>`,
+        `🏷 Username: ${user.username ? '@' + esc(user.username) : '(tidak ada)'}`,
         `🌐 Bahasa: ${user.language_code || '-'}`,
         `⚽ FPL ID: <code>${user.fpl_id}</code>`,
         `📅 Terdaftar: ${user.registered_at}`,
@@ -1382,8 +1429,8 @@ function registerCommands(bot) {
       return ctx.replyWithHTML(lines.join('\n'));
     }
 
-    // /users — Dashboard overview
-    const users = getAllUsers();
+    // /users — Dashboard overview (paginated)
+    const users = getAllUsers(50);
     const stats = getUserStats();
 
     const lines = [
@@ -1408,18 +1455,22 @@ function registerCommands(bot) {
     if (users.length > 0) {
       lines.push('<b>👤 Daftar User:</b>');
       lines.push('');
+      const escU = (s) => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       users.forEach((u, i) => {
         const isActive = u.last_seen && new Date(u.last_seen + 'Z') > new Date(Date.now() - 86400000);
         const dot = isActive ? '🟢' : '⚪';
         lines.push(
-          `${dot} ${i + 1}. <b>${u.first_name || 'Unknown'}${u.last_name ? ' ' + u.last_name : ''}</b>` +
-          `${u.username ? ' (@' + u.username + ')' : ''}`
+          `${dot} ${i + 1}. <b>${escU(u.first_name) || 'Unknown'}${u.last_name ? ' ' + escU(u.last_name) : ''}</b>` +
+          `${u.username ? ' (@' + escU(u.username) + ')' : ''}`
         );
         lines.push(
           `      FPL: <code>${u.fpl_id}</code> · Cmd: ${u.command_count} · Last: ${u.last_seen?.split(' ')[0] || '-'}`
         );
       });
       lines.push('');
+      if (stats.totalUsers > 50) {
+        lines.push(`<i>Menampilkan 50 dari ${stats.totalUsers} user.</i>`);
+      }
       lines.push('<i>💡 Ketik /users [chat_id] untuk detail user</i>');
     } else {
       lines.push('<i>Belum ada user terdaftar.</i>');
@@ -1435,7 +1486,7 @@ function registerCommands(bot) {
     const targetId = ctx.message.text.replace(/^\/removeuser\s*/i, '').trim();
     if (!targetId) return ctx.reply('Gunakan: /removeuser <chat_id>');
 
-    if (targetId === OWNER_ID) return ctx.reply('❌ Tidak bisa menghapus pemilik bot.');
+    if (String(targetId) === String(getOwnerId())) return ctx.reply('❌ Tidak bisa menghapus pemilik bot.');
 
     const user = getUser(targetId);
     if (!user) return ctx.reply(`❌ User ${targetId} tidak ditemukan.`);
@@ -1457,7 +1508,7 @@ function registerCommands(bot) {
       for (const [season, count] of Object.entries(results)) {
         lines.push(`  ${season}: ${count} pemain`);
       }
-      cachedScored = null; cacheTs = 0;
+      cachedScored = null; cacheTs = 0; cachePromise = null;
       lines.push('\n💡 Quality score semua pemain akan di-recalculate.');
       ctx.reply(lines.join('\n'));
     } catch (err) {
@@ -1501,9 +1552,7 @@ function registerCommands(bot) {
       const trimmed = password.trim();
       const hasWhitespace = password !== trimmed;
       const hasQuotes = password.startsWith('"') || password.startsWith("'");
-      const first = password[0];
-      const last = password[password.length - 1];
-      lines.push(`  FPL_PASSWORD: ✅ ${first}${'*'.repeat(Math.min(password.length - 2, 8))}${last} (${password.length} char)`);
+      lines.push(`  FPL_PASSWORD: ✅ ${'*'.repeat(Math.min(password.length, 10))} (${password.length} char)`);
       if (hasWhitespace) lines.push('  ⚠️ Password mengandung spasi di awal/akhir!');
       if (hasQuotes) lines.push('  ⚠️ Password mengandung tanda kutip!');
     } else {
@@ -1607,19 +1656,12 @@ function registerCommands(bot) {
               for (const s of debug.steps) {
                 const info = [`Step ${s.step} (${s.name}): HTTP ${s.status}`];
                 if (s.detectedFields?.length) info.push(`fields=[${s.detectedFields.join(',')}]`);
-                if (s.usedFields) info.push(`sent: email="${s.usedFields.email}", pass="${s.usedFields.pass}"`);
                 if (s.errorCode) info.push(`err=${s.errorCode}`);
                 if (s.errorReason) info.push(`reason=${s.errorReason}`);
                 if (s.screenName) info.push(`screen=${s.screenName}`);
                 lines.push(`  ${info.join(' | ')}`);
               }
-              // Show response snippet from login step
-              const loginStep = debug.steps.find(s => s.step === 4);
-              if (loginStep?.respSnippet) {
-                lines.push('');
-                lines.push('<b>📋 Login Response:</b>');
-                lines.push(`<code>${loginStep.respSnippet.substring(0, 250)}</code>`);
-              }
+              // Response snippets omitted for security
             }
           }
         } catch (err) {
@@ -1765,6 +1807,7 @@ function registerCommands(bot) {
     try {
       cachedScored = null;
       cacheTs = 0;
+      cachePromise = null;
       require('./fpl-api').clearCache();
       await getScoredPlayers();
       ctx.reply('✅ Data di-refresh dari FPL API.\n💡 Untuk refresh data historis: /refreshhistory');
